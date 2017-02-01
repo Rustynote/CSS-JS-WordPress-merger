@@ -166,9 +166,14 @@ final class enableRenderBlocking {
      * @since v1.0.0
      */
     public function cache_prepare() {
+		// In case if folder was deleted
+		$this->activation();
+		
 		$wp_styles = wp_styles();
 		foreach($wp_styles->queue as $queue) {
 			$this->add_css($queue);
+			
+			wp_dequeue_style($handle);
 		}
 
 		$this->css->handle = implode(';', $this->css->handle);
@@ -202,8 +207,6 @@ final class enableRenderBlocking {
 
 		$this->css->handle[] = $handle.($dep->ver ? '_'.$dep->ver : '');
 		$this->css->urls[] = $dep->src;
-
-		wp_dequeue_style($handle);
 	}
 
 	protected function minify_css() {
@@ -231,7 +234,7 @@ final class enableRenderBlocking {
 		if($matched) {
 			foreach($matched as $match) {
 				preg_match_all('/\.\./', end($match), $mach);
-				if(!is_array($mach) || empty(current($mach)))
+				if(!is_array($mach))
 					continue;
 
 				$rule = end($match);
