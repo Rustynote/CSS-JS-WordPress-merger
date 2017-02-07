@@ -99,18 +99,21 @@ final class enableRenderBlocking {
 		$this->domain   = 'erb';
 
 		$this->options = array(
-			'allow_external' => false,
-			'ignore_admin'   => false
+			'allow_external' => true,
+			'ignore_admin'   => false,
+			'whitelist' => array(
+				'*fonts.googleapis.com*'
+			)
 		);
 
 		// CSS dump
         $this->css         = new stdClass();
-        $this->css->urls   = [];
+        $this->css->queue   = [];
         $this->css->handle = [];
         $this->css->file   = '';
 		// Js dump
         $this->js          = new stdClass();
-        $this->js->urls    = [];
+        $this->js->queue    = [];
         $this->js->handle  = [];
         $this->js->file    = '';
 	}
@@ -168,16 +171,23 @@ final class enableRenderBlocking {
     public function cache_prepare() {
 		// In case if folder was deleted
 		$this->activation();
-		
+
 		$wp_styles = wp_styles();
 		foreach($wp_styles->queue as $queue) {
+			if(in_array($queue, ['admin-bar'])) {
+				continue;
+			}
+
 			$this->add_css($queue);
-			
-			wp_dequeue_style($handle);
 		}
 
 		$this->css->handle = implode(';', $this->css->handle);
 		$this->css->file = md5($this->css->handle).'.css';
+
+		// echo '<pre>';
+		// print_r($this->css);
+		// echo '</pre>';
+		// exit;
 
 		if(!file_exists($this->cache_dir.$this->css->file)) {
 			$this->minify_css();
@@ -194,6 +204,30 @@ final class enableRenderBlocking {
 
 		$dep = $wp_styles->registered[$handle];
 
+		// Return if there's condition. probbly if IEx. There's no need to
+		// include css intended for specific browser.
+		if(isset($dep->extra['conditional']))
+			return;
+
+		// || !in_array($dep->args, ['all', 'screen'])
+
+		// Check if css is external and if it's allowed, if not skip and enqueue
+		// style just in case if it's dependency.
+		if(!$this->options['allow_external'] && strpos($dep->src, $this->site_url) === false) {
+			wp_enqueue_script($handle);
+			return;
+		}
+
+		// If external is allowed, check the whitelist.
+		if($this->options['allow_external'] && !empty($this->options['whitelist'])) {
+			foreach($this->options['whitelist'] as $exeption) {
+				if(fnmatch($exeption, $dep->src)) {
+					wp_enqueue_script($handle);
+					return;
+				}
+			}
+		}
+
 		// Add dependencies before main file
 		if(!empty($dep->deps)) {
 			foreach($dep->deps as $queue) {
@@ -201,25 +235,38 @@ final class enableRenderBlocking {
 			}
 		}
 
-		// Skip loop if it's external file or media is not all
-		if(isset($dep->extra['conditional']) || (!$this->options['allow_external'] && strpos($dep->src, $this->site_url) === false) || !in_array($dep->args, ['all', 'screen']))
-			return;
+		wp_dequeue_style($handle);
 
 		$this->css->handle[] = $handle.($dep->ver ? '_'.$dep->ver : '');
-		$this->css->urls[] = $dep->src;
+		$this->css->queue[] = [
+			'url' => $dep->src,
+			'media' => $dep->args
+		];
 	}
 
 	protected function minify_css() {
-		$content = '';
-		foreach($this->css->urls as $url) {
-			$content .= $this->rel_to_abs(file_get_contents($url), $url);
+		$css = '';
+		foreach($this->css->queue as $queue) {
+			// Add http or https to url if it's needed
+			if(strpos($queue['url'], $_SERVER['REQUEST_SCHEME']) === false) {
+				$queue['url'] = $_SERVER['REQUEST_SCHEME'].':'.$queue['url'];
+			}
+
+			$content = file_get_contents($queue['url']);
+			$content = $this->rel_to_abs($content, $queue['url']);
+
+			// Add media query if it's not all
+			if($queue['media'] != 'all') {
+				$content = '@media '.$queue['media'].' {'.$content.'}';
+			}
+			$css .= $content;
 		}
-		$content = preg_replace('!/\*[^*]*\*+([^/][^*]*\*+)*/!', '', $content);
-	    $content = str_replace(': ', ':', $content);
-	    $content = str_replace(array("\r\n", "\r", "\n", "\t", '  ', '    ', '    '), '', $content);
+		$css = preg_replace('!/\*[^*]*\*+([^/][^*]*\*+)*/!', '', $css);
+	    $css = str_replace(': ', ':', $css);
+	    $css = str_replace(array("\r\n", "\r", "\n", "\t", '  ', '    ', '    '), '', $css);
 
         $file = fopen($this->cache_dir.$this->css->file, 'w+');
-		fwrite($file, $content);
+		fwrite($file, $css);
 		fclose($file);
 	}
 
@@ -233,8 +280,9 @@ final class enableRenderBlocking {
 		preg_match_all('/url\([\'"]?(.+?)[\'"]?\)/', $content, $matched, PREG_SET_ORDER);
 		if($matched) {
 			foreach($matched as $match) {
+				// find only relative url
 				preg_match_all('/\.\./', end($match), $mach);
-				if(!is_array($mach))
+				if(!is_array($mach) || empty(current($mach)))
 					continue;
 
 				$rule = end($match);
