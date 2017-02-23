@@ -1,8 +1,8 @@
 <?php
 /*
-Plugin Name: Enable-Render-Blocking
-Plugin URI: https://github.com/Rustynote/Enable-Render-Blocking
-Description: Aimed to fixe render blocking error by merging js and css and minifying it into two files.
+Plugin Name: CSS JS Queue Merger
+Plugin URI: https://github.com/Rustynote/CSS-JS-queue-merger
+Description: Aimed to lower number of request by merging css an js files while minifying them.
 Author: Jaroslav Suhanek
 Author URI: http://animaignis.com/
 Version: 1.0.0
@@ -184,11 +184,6 @@ final class enableRenderBlocking {
 		$this->css->handle = implode(';', $this->css->handle);
 		$this->css->file = md5($this->css->handle).'.css';
 
-		// echo '<pre>';
-		// print_r($this->css);
-		// echo '</pre>';
-		// exit;
-
 		if(!file_exists($this->cache_dir.$this->css->file)) {
 			$this->minify_css();
 		}
@@ -208,8 +203,6 @@ final class enableRenderBlocking {
 		// include css intended for specific browser.
 		if(isset($dep->extra['conditional']))
 			return;
-
-		// || !in_array($dep->args, ['all', 'screen'])
 
 		// Check if css is external and if it's allowed, if not skip and enqueue
 		// style just in case if it's dependency.
@@ -248,8 +241,12 @@ final class enableRenderBlocking {
 		$css = '';
 		foreach($this->css->queue as $queue) {
 			// Add http or https to url if it's needed
-			if(strpos($queue['url'], $_SERVER['REQUEST_SCHEME']) === false) {
-				$queue['url'] = $_SERVER['REQUEST_SCHEME'].':'.$queue['url'];
+			$protocol = 'http';
+			if(is_ssl())
+				$protocol = 'https';
+
+			if(strpos($queue['url'], $protocol) === false) {
+				$queue['url'] = $protocol.':'.$queue['url'];
 			}
 
 			$content = file_get_contents($queue['url']);
@@ -271,34 +268,42 @@ final class enableRenderBlocking {
 	}
 
 	protected function rel_to_abs($content, $url) {
-		$dir = explode('/', dirname($url));
-		$dir = array_reverse($dir);
+		$dir = dirname($url);
+		$dirstruc = explode('/', $url);
+		$dirstruc = array_reverse($dirstruc);
 
 		$replace = [];
 
 		// find all urls and ignore quotes
-		preg_match_all('/url\([\'"]?(.+?)[\'"]?\)/', $content, $matched, PREG_SET_ORDER);
+		// preg_match_all('/url\([\'"]?(.+?)[\'"]?\)/', $content, $matched, PREG_SET_ORDER);
+		preg_match_all('/url\((?!\s*([\'"]?(((?:https?:)?\/\/)|(?:data\:?:))))\s*(.+?)\)/', $content, $matched, PREG_SET_ORDER);
 		if($matched) {
 			foreach($matched as $match) {
-				// find only relative url
-				preg_match_all('/\.\./', end($match), $mach);
-				if(!is_array($mach) || empty(current($mach)))
-					continue;
+				$match = array_filter($match);
+				$url = preg_replace('/[\'"]/', '', end($match));
 
-				$rule = end($match);
+				$path = $dirstruc;
 
-				$path = $dir;
-				$match = explode('/', end($match));
-				foreach(current($mach) as $key => $part) {
-					unset($path[$key]);
-					unset($match[$key]);
+				// TODO: Fix this mess of a code. If there's code for shit, it's this.
+
+				// Check if file is in different folder
+				preg_match('/\.\./', end($match), $mach);
+				if($mach && !empty($mach)) {
+					$location = explode('/', end($match));
+					foreach($mach as $key => $part) {
+						unset($path[$key]);
+						unset($location[$key]);
+					}
+
+					$path = array_reverse($path);
+					$path = trailingslashit(implode('/', $path));
+					$location = implode('/', $location);
+				} else {
+					$location = $url;
+					$path = trailingslashit($dir);
 				}
 
-				$path = array_reverse($path);
-				$path = trailingslashit(implode('/', $path));
-				$match = implode('/', $match);
-
-				$replace[$rule] = $path.$match;
+				$replace[end($match)] = $path.$location;
 			}
 		}
 
