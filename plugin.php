@@ -12,14 +12,14 @@ Version: 1.0.0
 // Gandalf it if it's accessed directly
 if(!defined('ABSPATH')) exit;
 
-if(!class_exists('enableRenderBlocking')):
+if(!class_exists('CSSJSS_Merger')):
 
 /**
  * Main Class
  *
  * @since 1.0.0
  */
-final class enableRenderBlocking {
+final class CSSJSS_Merger {
 	/**
 	 * Place where every byte is a happy byte.
 	 * @see $this->globals()
@@ -34,7 +34,7 @@ final class enableRenderBlocking {
        static $init = null;
 
        if(null === $init) {
-           $init = new enableRenderBlocking;
+           $init = new CSSJSS_Merger;
            $init->globals();
            $init->actions();
        }
@@ -91,19 +91,19 @@ final class enableRenderBlocking {
 		$this->basename   = plugin_basename($this->file);
 		$this->plugin_dir = plugin_dir_path($this->file);
 		$this->plugin_url = plugin_dir_url($this->file);
-		$this->cache_dir  = WP_CONTENT_DIR.'/uploads/erb_cache/';
-		$this->cache_url  = WP_CONTENT_URL.'/uploads/erb_cache/';
+		$this->cache_dir  = WP_CONTENT_DIR.'/uploads/merger/';
+		$this->cache_url  = WP_CONTENT_URL.'/uploads/merger/';
 
 		$this->site_url = site_url();
 		$this->lang_dir = apply_filters('wpgm_lang_dir', trailingslashit($this->plugin_dir.'languages'));
 		$this->domain   = 'erb';
 
-		$this->options = array(
+		$this->options = wp_parse_args(get_option('cssjs_merger'), array(
 			'allow_external' => true,
 			'ignore_admin'   => false,
 			'whitelist' => array(
 				'*fonts.googleapis.com*'
-			)
+			))
 		);
 
 		// CSS dump
@@ -125,6 +125,10 @@ final class enableRenderBlocking {
      */
     function actions() {
 		register_activation_hook(__FILE__, array($this, 'activation'));
+		if(is_admin()){
+			add_action('admin_init', array($this, 'admin_init'));
+			add_action('admin_menu', array($this, 'admin_menu'));
+		}
 
 		if($this->options['ignore_admin'] && current_user_can('administrator'))
 			return;
@@ -316,6 +320,70 @@ final class enableRenderBlocking {
 		return $content;
 	}
 
+	public function admin_init() {
+		register_setting('cssjs_merger', 'cssjs_merger', array($this, 'validate'));
+	}
+
+	public function admin_menu() {
+		add_options_page('Queue Merger', 'CSSJS Queue Merger', 'manage_options', 'cssjs_merger', array($this, 'page_content'));
+	}
+
+	public function validate($old) {
+		$new = $old;
+
+		return $new;
+	}
+
+	public function page_content() {
+		$options = $this->options;
+		?>
+		<div class="wrap">
+	        <h2>CSSJS Queue Merger</h2>
+			<p>For this plugin to work as intended, styles and js must be properly enqueued (<a href="https://developer.wordpress.org/reference/functions/wp_enqueue_style/">wp_enqueue_style</a> and <a href="https://developer.wordpress.org/reference/functions/wp_enqueue_script/">wp_enqueue_script</a>). Plugin uses style/script handle name combined with version to form a hash which is then used for cache file name. <br />This mean new file will be automatically generated if plugin or theme is updated, this also means if some page requires more or different css/js new file will be generated.</p>
+			<p><a href="https://developer.wordpress.org/themes/basics/including-css-javascript/">How to properly include css and javascript</a></p>
+	        <form method="post" action="options.php">
+	            <?php settings_fields('cssjs_merger'); ?>
+	            <table class="form-table">
+	                <tr valign="top"><th scope="row"><label for="ignore-admin">Ignore Administrator?</label></th>
+	                    <td><input name="ignore_admin" type="checkbox" id="ignore-admin" value="" <?php checked(1, $options['ignore_admin']) ?>><label for="ignore-admin">True</label></td>
+	                </tr>
+	                <tr valign="top"><th scope="row"><label for="external">Allow External?</label></th>
+	                    <td><input name="allow_external" type="checkbox" id="external" value="" <?php checked(1, $options['allow_external']) ?>><label for="external">True</label></td>
+	                </tr>
+	                <tr valign="top"><th scope="row"><label for="whitelist">Whitelist</label></th>
+	                    <td>
+							<textarea id="whitelist" name="whitelist" cols="100" rows="10"><?=implode("\n", $options['whitelist'])?></textarea>
+							<p class="description">Use <code>*</code> as wildcard. One rule per line.</p>
+						</td>
+	                </tr>
+	            </table>
+	            <p class="submit">
+	                <input type="submit" class="button-primary" value="<?php _e('Save Changes') ?>" />
+	            </p>
+	        </form>
+			<h2>Cache</h2>
+			<p>Currently there's no funcionality to remove outdated files from so you should do it manualy by clicking the button bellow.</p>
+			<p>Current cache size: <code>
+			<?php
+				// Get folder size and format it to b/kb/mb/etc
+				$size = 0;
+			    foreach (glob(rtrim($this->cache_dir, '/').'/*', GLOB_NOSORT) as $each) {
+			        $size += is_file($each) ? filesize($each) : 0;
+			    }
+				$units = array('B', 'KB', 'MB', 'GB', 'TB');
+				$bytes = max($size, 0);
+			    $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
+			    $pow = min($pow, count($units) - 1);
+			    $bytes /= pow(1024, $pow);
+
+			    echo round($bytes, 2) . ' ' . $units[$pow];
+			?>
+			</code></p>
+			<input type="submit" class="button-secondary" name="purge-cache" value="Clear Cache" />
+	    </div>
+		<?php
+	}
+
 }
 
 if(!function_exists('erb')) {
@@ -323,7 +391,7 @@ if(!function_exists('erb')) {
 	 * Main function
 	 */
 	function erb() {
-		return enableRenderBlocking::init();
+		return CSSJSS_Merger::init();
 	}
 }
 
