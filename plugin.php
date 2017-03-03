@@ -6,6 +6,8 @@ Description: Aimed to lower number of request by merging css an js files while m
 Author: Jaroslav Suhanek
 Author URI: http://animaignis.com/
 Version: 1.0.0
+Text Domain: cssjs-merger
+Domain Path: /languages
 
 GitHub Plugin URI: Rustynote/CSS-JS-queue-merger
 GitHub Plugin URI: https://github.com/Rustynote/CSS-JS-queue-merger
@@ -98,8 +100,6 @@ final class CSSJSS_Merger {
 		$this->cache_url  = WP_CONTENT_URL.'/uploads/merger/';
 
 		$this->site_url = site_url();
-		$this->lang_dir = apply_filters('wpgm_lang_dir', trailingslashit($this->plugin_dir.'languages'));
-		$this->domain   = 'cssjs-merger';
 
 		$this->options = wp_parse_args(get_option('cssjs_merger'), array(
 			'allow_external' => true,
@@ -378,14 +378,14 @@ final class CSSJSS_Merger {
 	 * @since 1.0.0
 	 */
 	public function admin_menu() {
-		add_options_page('Queue Merger', 'CSSJS Queue Merger', 'manage_options', 'cssjs_merger', array($this, 'page_content'));
+		add_options_page(__('Queue Merger', 'cssjs-merger'), __('CSSJS Queue Merger', 'cssjs-merger'), 'manage_options', 'cssjs_merger', array($this, 'page_content'));
 	}
 
 	/**
 	 * Add settings link to plugin page
 	 */
 	public function plugin_action_links($actions) {
-		$actions[] = '<a href="'.menu_page_url('cssjs_merger', false).'">'.__('Settings', $this->domain).'</a>';
+		$actions[] = '<a href="'.menu_page_url('cssjs_merger', false).'">'.__('Settings', 'cssjs-merger').'</a>';
 		return $actions;
 	}
 
@@ -426,22 +426,22 @@ final class CSSJSS_Merger {
 		$options = $this->options;
 		?>
 		<div class="wrap">
-	        <h2><?=__('CSSJS Queue Merger', $this->domain)?></h2>
-			<p><?=sprintf(__('For this plugin to work as intended, styles and js must be properly enqueued (%s and %s). Plugin uses style/script handle name combined with version to form a hash which is then used for cache file name. <br />This mean new file will be automatically generated if plugin or theme is updated, this also means if some page requires more or different css/js new file will be generated.', $this->domain), '<a href="https://developer.wordpress.org/reference/functions/wp_enqueue_style/">wp_enqueue_style</a>', '<a href="https://developer.wordpress.org/reference/functions/wp_enqueue_script/">wp_enqueue_script</a>')?></p>
-			<p><a href="https://developer.wordpress.org/themes/basics/including-css-javascript/"><?=__('How to properly include css and javascript', $this->domain)?></a></p>
+	        <h2><?=__('CSSJS Queue Merger', 'cssjs-merger')?></h2>
+			<p><?=sprintf(__('For this plugin to work as intended, styles and js must be properly enqueued (%s and %s). Plugin uses style/script handle name combined with version to form a hash which is then used for cache file name. <br />This mean new file will be automatically generated if plugin or theme is updated, this also means if some page requires more or different css/js new file will be generated.', 'cssjs-merger'), '<a href="https://developer.wordpress.org/reference/functions/wp_enqueue_style/">wp_enqueue_style</a>', '<a href="https://developer.wordpress.org/reference/functions/wp_enqueue_script/">wp_enqueue_script</a>')?></p>
+			<p><a href="https://developer.wordpress.org/themes/basics/including-css-javascript/"><?=__('How to properly include css and javascript', 'cssjs-merger')?></a></p>
 	        <form method="post" action="options.php">
 	            <?php settings_fields('cssjs_merger'); ?>
 	            <table class="form-table">
-	                <tr valign="top"><th scope="row"><label for="ignore-admin"><?=__('Ignore Administrator?', $this->domain)?></label></th>
+	                <tr valign="top"><th scope="row"><label for="ignore-admin"><?=__('Ignore Administrator?', 'cssjs-merger')?></label></th>
 	                    <td><input name="cssjs_merger[ignore_admin]" type="checkbox" id="ignore-admin" value="1" <?php checked(1, $options['ignore_admin']) ?>><label for="ignore-admin">Yes</label></td>
 	                </tr>
-	                <tr valign="top"><th scope="row"><label for="external"><?=__('Allow External?', $this->domain)?></label></th>
+	                <tr valign="top"><th scope="row"><label for="external"><?=__('Allow External?', 'cssjs-merger')?></label></th>
 	                    <td><input name="cssjs_merger[allow_external]" type="checkbox" id="external" value="1" <?php checked(1, $options['allow_external']) ?>><label for="external">Yes</label></td>
 	                </tr>
-	                <tr valign="top"><th scope="row"><label for="whitelist"><?=__('Whitelist', $this->domain)?></label></th>
+	                <tr valign="top"><th scope="row"><label for="whitelist"><?=__('Whitelist', 'cssjs-merger')?></label></th>
 	                    <td>
 							<textarea id="whitelist" name="cssjs_merger[whitelist]" cols="100" rows="10"><?=implode("\n", $options['whitelist'])?></textarea>
-							<p class="description"><?=sprintf(__('Use %s as wildcard. One rule per line.', $this->domain), '<code>*</code>')?></p>
+							<p class="description"><?=sprintf(__('Use %s as wildcard. One rule per line.', 'cssjs-merger'), '<code>*</code>')?></p>
 						</td>
 	                </tr>
 	            </table>
@@ -449,9 +449,9 @@ final class CSSJSS_Merger {
 	                <input type="submit" class="button-primary" value="<?php _e('Save Changes') ?>" />
 	            </p>
 	        </form>
-			<h2><?=__('Cache', $this->domain)?></h2>
-			<p><?=__("Currently there's no funcionality to remove outdated files from so you should do it manualy by clicking the button bellow.", $this->domain)?></p>
-			<p><?=__('Current cache size:', $this->domain)?> <code>
+			<h2><?=__('Cache', 'cssjs-merger')?></h2>
+			<p><?=__("Currently there's no funcionality to remove outdated files from so you should do it manualy by clicking the button bellow.", 'cssjs-merger')?></p>
+			<p><?=__('Current cache size:', 'cssjs-merger')?> <code>
 			<?php
 				// Get folder size and format it to b/kb/mb/etc
 				$size = 0;
@@ -468,7 +468,7 @@ final class CSSJSS_Merger {
 			?>
 			</code></p>
 			<form action="" method="post">
-				<input type="submit" class="button-secondary" name="purge-cache" value="<?=__('Clear Cache', $this->domain)?>" />
+				<input type="submit" class="button-secondary" name="purge-cache" value="<?=__('Clear Cache', 'cssjs-merger')?>" />
 			</form>
 	    </div>
 		<?php
