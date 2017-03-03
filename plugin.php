@@ -96,7 +96,7 @@ final class CSSJSS_Merger {
 
 		$this->site_url = site_url();
 		$this->lang_dir = apply_filters('wpgm_lang_dir', trailingslashit($this->plugin_dir.'languages'));
-		$this->domain   = 'erb';
+		$this->domain   = 'cssjs-merger';
 
 		$this->options = wp_parse_args(get_option('cssjs_merger'), array(
 			'allow_external' => true,
@@ -125,9 +125,11 @@ final class CSSJSS_Merger {
      */
     function actions() {
 		register_activation_hook(__FILE__, array($this, 'activation'));
+		register_deactivation_hook(__FILE__, array($this, 'purge_cache'));
 		if(is_admin()){
 			add_action('admin_init', array($this, 'admin_init'));
 			add_action('admin_menu', array($this, 'admin_menu'));
+			add_action('plugin_action_links_'.$this->basename, array($this, 'plugin_action_links'));
 		}
 
 		if($this->options['ignore_admin'] && current_user_can('administrator'))
@@ -196,6 +198,12 @@ final class CSSJSS_Merger {
 		// $wp_scripts = wp_scripts();
     }
 
+	/**
+	 * Add url and dependencies to the queue
+	 *
+	 * @since 1.0.0
+	 * @var string $handle Style handle from wp_register_script.
+	 */
 	protected function add_css($handle) {
 		$wp_styles = wp_styles();
 		if(!isset($wp_styles->registered[$handle]))
@@ -235,15 +243,20 @@ final class CSSJSS_Merger {
 		wp_dequeue_style($handle);
 
 		$this->css->handle[] = $handle.($dep->ver ? '_'.$dep->ver : '');
-		$this->css->queue[] = [
+		$this->css->queue[$handle] = [
 			'url' => $dep->src,
 			'media' => $dep->args
 		];
 	}
 
+	/**
+	 * Merge and minify all
+	 *
+	 * @since 1.0.0
+	 */
 	protected function minify_css() {
 		$css = '';
-		foreach($this->css->queue as $queue) {
+		foreach($this->css->queue as $handle => $queue) {
 			// Add http or https to url if it's needed
 			$protocol = 'http';
 			if(is_ssl())
@@ -254,6 +267,12 @@ final class CSSJSS_Merger {
 			}
 
 			$content = file_get_contents($queue['url']);
+			// It couldnt get content form file so add style to wp queue.
+			if($content === false) {
+				wp_enqueue_style($handle);
+				continue;
+			}
+
 			$content = $this->rel_to_abs($content, $queue['url']);
 
 			// Add media query if it's not all
@@ -271,6 +290,13 @@ final class CSSJSS_Merger {
 		fclose($file);
 	}
 
+	/**
+	 * Convert relative url to absolute.
+	 *
+	 * @since 1.0.0
+	 * @var string $content Whole file content
+	 * @var string $url File url
+	 */
 	protected function rel_to_abs($content, $url) {
 		$dir = dirname($url);
 		$dirstruc = explode('/', $url);
@@ -279,7 +305,6 @@ final class CSSJSS_Merger {
 		$replace = [];
 
 		// find all urls and ignore quotes
-		// preg_match_all('/url\([\'"]?(.+?)[\'"]?\)/', $content, $matched, PREG_SET_ORDER);
 		preg_match_all('/url\((?!\s*([\'"]?(((?:https?:)?\/\/)|(?:data\:?:))))\s*(.+?)\)/', $content, $matched, PREG_SET_ORDER);
 		if($matched) {
 			foreach($matched as $match) {
@@ -288,7 +313,8 @@ final class CSSJSS_Merger {
 
 				$path = $dirstruc;
 
-				// TODO: Fix this mess of a code. If there's code for shit, it's this.
+				// TODO: Fix this mess of a code. It's not self explanatory. At
+				//       least comment it out.
 
 				// Check if file is in different folder
 				preg_match('/\.\./', end($match), $mach);
@@ -320,40 +346,99 @@ final class CSSJSS_Merger {
 		return $content;
 	}
 
-	public function admin_init() {
-		register_setting('cssjs_merger', 'cssjs_merger', array($this, 'validate'));
+	/**
+	 * Delete all cached files and remove the folder.
+	 *
+	 * @since 1.0.0
+	 */
+	public function purge_cache() {
+		array_map('unlink', glob($this->cache_dir.'*.*'));
+		rmdir($this->cache_dir);
 	}
 
+	/**
+	 * Admin init. Register settings for options page.
+	 *
+	 * @since 1.0.0
+	 */
+	public function admin_init() {
+		register_setting('cssjs_merger', 'cssjs_merger', array($this, 'validate'));
+
+		if(isset($_GET['page']) && $_GET['page'] == 'cssjs_merger' && isset($_POST['purge-cache'])) {
+			$this->purge_cache();
+		}
+	}
+
+	/**
+	 * Add options page to the Settings.
+	 *
+	 * @since 1.0.0
+	 */
 	public function admin_menu() {
 		add_options_page('Queue Merger', 'CSSJS Queue Merger', 'manage_options', 'cssjs_merger', array($this, 'page_content'));
 	}
 
+	/**
+	 * Add settings link to plugin page
+	 */
+	public function plugin_action_links($actions) {
+		$actions[] = '<a href="'.menu_page_url('cssjs_merger', false).'">'.__('Settings', $this->domain).'</a>';
+		return $actions;
+	}
+
+	/**
+	 * Validate and sanitize the settings.
+	 *
+	 * @since 1.0.0
+	 * @var array $old Settings submitted by options page form.
+	 */
 	public function validate($old) {
-		$new = $old;
+		$new = [];
+
+		foreach($old as $key => $val) {
+			switch($key) {
+				case 'ignore_admin':
+					$val = 1;
+					break;
+				case 'allow_external':
+					$val = 1;
+					break;
+				case 'whitelist':
+					$val = explode("\n", $val);
+					break;
+
+			}
+			$new[$key] = $val;
+		}
 
 		return $new;
 	}
 
+	/**
+	 * Options page content.
+	 *
+	 * @since 1.0.0
+	 */
 	public function page_content() {
 		$options = $this->options;
 		?>
 		<div class="wrap">
-	        <h2>CSSJS Queue Merger</h2>
-			<p>For this plugin to work as intended, styles and js must be properly enqueued (<a href="https://developer.wordpress.org/reference/functions/wp_enqueue_style/">wp_enqueue_style</a> and <a href="https://developer.wordpress.org/reference/functions/wp_enqueue_script/">wp_enqueue_script</a>). Plugin uses style/script handle name combined with version to form a hash which is then used for cache file name. <br />This mean new file will be automatically generated if plugin or theme is updated, this also means if some page requires more or different css/js new file will be generated.</p>
-			<p><a href="https://developer.wordpress.org/themes/basics/including-css-javascript/">How to properly include css and javascript</a></p>
+	        <h2><?=__('CSSJS Queue Merger', $this->domain)?></h2>
+			<p><?=sprintf(__('For this plugin to work as intended, styles and js must be properly enqueued (%s and %s). Plugin uses style/script handle name combined with version to form a hash which is then used for cache file name. <br />This mean new file will be automatically generated if plugin or theme is updated, this also means if some page requires more or different css/js new file will be generated.', $this->domain), '<a href="https://developer.wordpress.org/reference/functions/wp_enqueue_style/">wp_enqueue_style</a>', '<a href="https://developer.wordpress.org/reference/functions/wp_enqueue_script/">wp_enqueue_script</a>')?></p>
+			<p><a href="https://developer.wordpress.org/themes/basics/including-css-javascript/"><?=__('How to properly include css and javascript', $this->domain)?></a></p>
 	        <form method="post" action="options.php">
 	            <?php settings_fields('cssjs_merger'); ?>
 	            <table class="form-table">
-	                <tr valign="top"><th scope="row"><label for="ignore-admin">Ignore Administrator?</label></th>
-	                    <td><input name="ignore_admin" type="checkbox" id="ignore-admin" value="" <?php checked(1, $options['ignore_admin']) ?>><label for="ignore-admin">True</label></td>
+	                <tr valign="top"><th scope="row"><label for="ignore-admin"><?=__('Ignore Administrator?', $this->domain)?></label></th>
+	                    <td><input name="cssjs_merger[ignore_admin]" type="checkbox" id="ignore-admin" value="1" <?php checked(1, $options['ignore_admin']) ?>><label for="ignore-admin">Yes</label></td>
 	                </tr>
-	                <tr valign="top"><th scope="row"><label for="external">Allow External?</label></th>
-	                    <td><input name="allow_external" type="checkbox" id="external" value="" <?php checked(1, $options['allow_external']) ?>><label for="external">True</label></td>
+	                <tr valign="top"><th scope="row"><label for="external"><?=__('Allow External?', $this->domain)?></label></th>
+	                    <td><input name="cssjs_merger[allow_external]" type="checkbox" id="external" value="1" <?php checked(1, $options['allow_external']) ?>><label for="external">Yes</label></td>
 	                </tr>
-	                <tr valign="top"><th scope="row"><label for="whitelist">Whitelist</label></th>
+	                <tr valign="top"><th scope="row"><label for="whitelist"><?=__('Whitelist', $this->domain)?></label></th>
 	                    <td>
-							<textarea id="whitelist" name="whitelist" cols="100" rows="10"><?=implode("\n", $options['whitelist'])?></textarea>
-							<p class="description">Use <code>*</code> as wildcard. One rule per line.</p>
+							<textarea id="whitelist" name="cssjs_merger[whitelist]" cols="100" rows="10"><?=implode("\n", $options['whitelist'])?></textarea>
+							<p class="description"><?=sprintf(__('Use %s as wildcard. One rule per line.', $this->domain), '<code>*</code>')?></p>
 						</td>
 	                </tr>
 	            </table>
@@ -361,9 +446,9 @@ final class CSSJSS_Merger {
 	                <input type="submit" class="button-primary" value="<?php _e('Save Changes') ?>" />
 	            </p>
 	        </form>
-			<h2>Cache</h2>
-			<p>Currently there's no funcionality to remove outdated files from so you should do it manualy by clicking the button bellow.</p>
-			<p>Current cache size: <code>
+			<h2><?=__('Cache', $this->domain)?></h2>
+			<p><?=__("Currently there's no funcionality to remove outdated files from so you should do it manualy by clicking the button bellow.", $this->domain)?></p>
+			<p><?=__('Current cache size:', $this->domain)?> <code>
 			<?php
 				// Get folder size and format it to b/kb/mb/etc
 				$size = 0;
@@ -379,7 +464,9 @@ final class CSSJSS_Merger {
 			    echo round($bytes, 2) . ' ' . $units[$pow];
 			?>
 			</code></p>
-			<input type="submit" class="button-secondary" name="purge-cache" value="Clear Cache" />
+			<form action="" method="post">
+				<input type="submit" class="button-secondary" name="purge-cache" value="<?=__('Clear Cache', $this->domain)?>" />
+			</form>
 	    </div>
 		<?php
 	}
