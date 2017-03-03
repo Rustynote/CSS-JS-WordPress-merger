@@ -473,15 +473,15 @@ final class CSSJSS_Merger {
 
 }
 
-if(!function_exists('erb')) {
+if(!function_exists('CSSJSSMerger')) {
 	/**
 	 * Main function
 	 */
-	function erb() {
+	function CSSJSSMerger() {
 		return CSSJSS_Merger::init();
 	}
 }
 
 endif;
 
-add_action('init', 'erb');
+add_action('init', 'CSSJSSMerger');
