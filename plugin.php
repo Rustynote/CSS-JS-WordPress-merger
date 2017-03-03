@@ -6,6 +6,9 @@ Description: Aimed to lower number of request by merging css an js files while m
 Author: Jaroslav Suhanek
 Author URI: http://animaignis.com/
 Version: 1.0.0
+
+GitHub Plugin URI: Rustynote/CSS-JS-queue-merger
+GitHub Plugin URI: https://github.com/Rustynote/CSS-JS-queue-merger
 */
 
 
