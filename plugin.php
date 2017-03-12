@@ -102,12 +102,18 @@ final class CSSJSS_Merger {
 		$this->site_url = site_url();
 
 		$this->options = wp_parse_args(get_option('cssjs_merger'), array(
-			'allow_external' => true,
-			'ignore_admin'   => false,
-			'whitelist' => array(
+			'ignore_admin'  => false,
+			'css_external'  => true,
+			'css_whitelist' => array(
 				'*fonts.googleapis.com*'
-			))
-		);
+			),
+			'css_error' 	=> [],
+			'js_external'  => true,
+			'js_whitelist' => array(
+				'*cdn*'
+			),
+			'js_error' 	=> []
+		));
 
 		// CSS dump
         $this->css         = new stdClass();
@@ -163,13 +169,13 @@ final class CSSJSS_Merger {
      */
     public function run_cache_last() {
 		if(empty($GLOBALS['wp_filter']['wp_enqueue_scripts'])) {
-	        $this->cache_priority = PHP_INT_MAX;
+	        $priority = PHP_INT_MAX;
+		} else {
+			$functions = array_keys($GLOBALS['wp_filter']['wp_enqueue_scripts']->callbacks);
+		    $priority = end($functions);
 		}
 
-		$priorities = array_keys($GLOBALS['wp_filter']['wp_enqueue_scripts']->callbacks);
-	    $last = end($priorities);
-
-		add_action('wp_enqueue_scripts', array($this, 'cache_prepare'), $last);
+		add_action('wp_enqueue_scripts', array($this, 'cache_prepare'), $priority);
     }
 
     /**
@@ -190,15 +196,34 @@ final class CSSJSS_Merger {
 			$this->add_css($queue);
 		}
 
-		$this->css->handle = implode(';', $this->css->handle);
-		$this->css->file = md5($this->css->handle).'.css';
+		$this->generate_css_name();
 
 		if(!file_exists($this->cache_dir.$this->css->file)) {
 			$this->minify_css();
 		}
 		wp_enqueue_style($this->basename, $this->cache_url.$this->css->file, [], $this->version, 'all');
 
-		// $wp_scripts = wp_scripts();
+		// Js
+		$wp_scripts = wp_scripts();
+		foreach($wp_scripts->queue as $queue) {
+			if(in_array($queue, ['admin-bar'])) {
+				continue;
+			}
+
+			$this->add_js($queue);
+		}
+
+		$this->generate_js_name();
+
+		if(!file_exists($this->cache_dir.$this->js->file)) {
+			$this->minify_js();
+		}
+		wp_enqueue_script($this->basename, $this->cache_url.$this->js->file, [], $this->version, true);
+
+		// Update options with new errors if needed
+		if($this->update_options)
+			update_option('cssjs_merger', $this->options);
+
     }
 
 	/**
@@ -221,16 +246,16 @@ final class CSSJSS_Merger {
 
 		// Check if css is external and if it's allowed, if not skip and enqueue
 		// style just in case if it's dependency.
-		if(!$this->options['allow_external'] && strpos($dep->src, $this->site_url) === false) {
-			wp_enqueue_script($handle);
+		if(!$this->options['css_external'] && strpos($dep->src, $this->site_url) === false) {
+			wp_enqueue_style($handle);
 			return;
 		}
 
 		// If external is allowed, check the whitelist.
-		if($this->options['allow_external'] && !empty($this->options['whitelist'])) {
-			foreach($this->options['whitelist'] as $exeption) {
+		if(!empty($this->options['css_whitelist']) || !empty($this->options['css_error'])) {
+			foreach($this->options['css_whitelist'] + $this->options['css_error'] as $exeption) {
 				if(fnmatch($exeption, $dep->src)) {
-					wp_enqueue_script($handle);
+					wp_enqueue_style($handle);
 					return;
 				}
 			}
@@ -245,7 +270,7 @@ final class CSSJSS_Merger {
 
 		wp_dequeue_style($handle);
 
-		$this->css->handle[] = $handle.($dep->ver ? '_'.$dep->ver : '');
+		$this->css->handle[$handle] = $handle.($dep->ver ? '_'.$dep->ver : '');
 		$this->css->queue[$handle] = [
 			'url' => $dep->src,
 			'media' => $dep->args
@@ -253,13 +278,67 @@ final class CSSJSS_Merger {
 	}
 
 	/**
-	 * Merge and minify all
+	 * Add url and dependencies to the queue
+	 *
+	 * @since 1.0.0
+	 * @var string $handle Style handle from wp_register_script.
+	 */
+	protected function add_js($handle) {
+		$wp_scripts = wp_scripts();
+		if(!isset($wp_scripts->registered[$handle]))
+			return;
+
+		$dep = $wp_scripts->registered[$handle];
+
+		// Return if there's condition. probbly if IEx. There's no need to
+		// include css intended for specific browser.
+		if(isset($dep->extra['conditional']))
+			return;
+
+		// Check if js is external and if it's allowed, if not skip and enqueue
+		// style just in case if it's dependency.
+		if(!$this->options['js_external'] && strpos($dep->src, $this->site_url) === false) {
+			wp_enqueue_script($handle);
+			return;
+		}
+
+		// If external is allowed, check the whitelist.
+		if(!empty($this->options['js_whitelist']) || !empty($this->options['js_error'])) {
+			foreach($this->options['js_whitelist'] + $this->options['js_error'] as $exeption) {
+				if(fnmatch($exeption, $dep->src)) {
+					wp_enqueue_script($handle);
+					return;
+				}
+			}
+		}
+
+		// Add dependencies before main file
+		if(!empty($dep->deps)) {
+			foreach($dep->deps as $queue) {
+				$this->add_js($queue);
+			}
+		}
+
+		wp_dequeue_script($handle);
+
+		$this->js->handle[$handle] = $handle.($dep->ver ? '_'.$dep->ver : '');
+		$this->js->queue[$handle] = [
+			'url' => $dep->src,
+			'data' => (isset($dep->extra['data']) ? $dep->extra['data'] : null)
+		];
+	}
+
+	/**
+	 * Merge and minify css
 	 *
 	 * @since 1.0.0
 	 */
 	protected function minify_css() {
 		$css = '';
 		foreach($this->css->queue as $handle => $queue) {
+			if(empty($queue['url']))
+				continue;
+
 			// Add http or https to url if it's needed
 			$protocol = 'http';
 			if(is_ssl())
@@ -270,8 +349,13 @@ final class CSSJSS_Merger {
 			}
 
 			$content = file_get_contents($queue['url']);
-			// It couldnt get content form file so add style to wp queue.
+
+			// It couldnt get content from file so add style to wp queue and
+			// add it to error options so it's skipped next time.
 			if($content === false) {
+				$this->options['css_error'][] = $queue['url'];
+				$this->update_options = true;
+				unset($this->css->handle[$handle]);
 				wp_enqueue_style($handle);
 				continue;
 			}
@@ -288,9 +372,86 @@ final class CSSJSS_Merger {
 	    $css = str_replace(': ', ':', $css);
 	    $css = str_replace(array("\r\n", "\r", "\n", "\t", '  ', '    ', '    '), '', $css);
 
+		$this->generate_css_name();
+
         $file = fopen($this->cache_dir.$this->css->file, 'w+');
 		fwrite($file, $css);
 		fclose($file);
+	}
+
+	/**
+	 * Merge and minify js
+	 *
+	 * @since 1.0.0
+	 */
+	protected function minify_js() {
+		$js = '';
+		foreach($this->js->queue as $handle => $queue) {
+			if(empty($queue['url']))
+				continue;
+
+			// Add http or https to url if it's needed
+			$protocol = 'http';
+			if(is_ssl())
+				$protocol = 'https';
+
+			// Check if url has top level domain. If not, it's relative to current website.
+			if(!preg_match('/\..*\//', $queue['url'])) {
+				$queue['url'] = site_url($queue['url']);
+			}
+
+			if(strpos($queue['url'], $protocol) === false) {
+				$queue['url'] = $protocol.':'.$queue['url'];
+			}
+
+
+			$content = file_get_contents($queue['url']);
+
+			// It couldnt get content from file so add script to wp queue and
+			// add it to error options so it's skipped next time.
+			if($content === false) {
+				$this->options['js_error'][] = $queue['url'];
+				$this->update_options = true;
+				unset($this->js->handle[$handle]);
+				wp_enqueue_script($handle);
+				continue;
+			}
+
+			// Add data before content
+			if($queue['data']) {
+				$content = $queue['data'].$content;
+			}
+			$js .= $content;
+		}
+
+		require_once $this->plugin_dir.'/JShrink-1.1.0/Minifier.php';
+		$js = \JShrink\Minifier::minify($js);
+
+		$this->generate_js_name();
+
+        $file = fopen($this->cache_dir.$this->js->file, 'w+');
+		fwrite($file, $js);
+		fclose($file);
+	}
+
+	/**
+	 * Generate css file name.
+	 *
+	 * @since 1.0.0
+	 */
+	protected function generate_css_name() {
+		$handle = implode(';', $this->css->handle);
+		$this->css->file = md5($handle).'.css';
+	}
+
+	/**
+	 * Generate js file name.
+	 *
+	 * @since 1.0.0
+	 */
+	protected function generate_js_name() {
+		$handle = implode(';', $this->js->handle);
+		$this->js->file = md5($handle).'.js';
 	}
 
 	/**
@@ -400,13 +561,15 @@ final class CSSJSS_Merger {
 
 		foreach($old as $key => $val) {
 			switch($key) {
+				case 'css_external':
+				case 'js_external':
 				case 'ignore_admin':
 					$val = 1;
 					break;
-				case 'allow_external':
-					$val = 1;
-					break;
-				case 'whitelist':
+				case 'css_whitelist':
+				case 'css_error':
+				case 'js_whitelist':
+				case 'js_error':
 					$val = explode("\n", $val);
 					break;
 
@@ -435,13 +598,64 @@ final class CSSJSS_Merger {
 	                <tr valign="top"><th scope="row"><label for="ignore-admin"><?=__('Ignore Administrator?', 'cssjs-merger')?></label></th>
 	                    <td><input name="cssjs_merger[ignore_admin]" type="checkbox" id="ignore-admin" value="1" <?php checked(1, $options['ignore_admin']) ?>><label for="ignore-admin">Yes</label></td>
 	                </tr>
-	                <tr valign="top"><th scope="row"><label for="external"><?=__('Allow External?', 'cssjs-merger')?></label></th>
-	                    <td><input name="cssjs_merger[allow_external]" type="checkbox" id="external" value="1" <?php checked(1, $options['allow_external']) ?>><label for="external">Yes</label></td>
+				</table>
+				<h2 class="nav-tab-wrapper">
+				    <a href="#css" class="nav-tab nav-tab-active">CSS</a>
+				    <a href="#js" class="nav-tab">JS</a>
+				    <a href="#cache" class="nav-tab">Cache</a>
+				</h2>
+				<script>
+					jQuery(document).ready(function($) {
+						$('.nav-tab-wrapper a').click(function(e) {
+							e.preventDefault();
+
+							if(!$(this).hasClass('.nav-tab-active')) {
+								$(this).parent().find('.nav-tab-active').removeClass('nav-tab-active');
+								$(this).addClass('nav-tab-active');
+								$('.form-table[id]').hide();
+
+								if($(this).attr('href') == '#cache') {
+									$('p.submit').hide();
+								} else {
+									$('p.submit').show();
+								}
+
+								$('.form-table'+$(this).attr('href')).show();
+							}
+						});
+					});
+				</script>
+				<table id="css" class="form-table">
+	                <tr valign="top"><th scope="row"><label for="css_external"><?=__('Allow External?', 'cssjs-merger')?></label></th>
+	                    <td><input name="cssjs_merger[css_external]" type="checkbox" id="css_external" value="1" <?php checked(1, $options['css_external']) ?>><label for="css_external">Yes</label></td>
 	                </tr>
-	                <tr valign="top"><th scope="row"><label for="whitelist"><?=__('Whitelist', 'cssjs-merger')?></label></th>
+	                <tr valign="top"><th scope="row"><label for="css_whitelist"><?=__('Whitelist', 'cssjs-merger')?></label></th>
 	                    <td>
-							<textarea id="whitelist" name="cssjs_merger[whitelist]" cols="100" rows="10"><?=implode("\n", $options['whitelist'])?></textarea>
-							<p class="description"><?=sprintf(__('Use %s as wildcard. One rule per line.', 'cssjs-merger'), '<code>*</code>')?></p>
+							<textarea id="css_whitelist" name="cssjs_merger[css_whitelist]" cols="100" rows="8"><?=implode("\n", $options['css_whitelist'])?></textarea>
+							<p class="description"><?=sprintf(__('Use %s as wildcard. One rule per line. If rule is matched, it will ignore the file.', 'cssjs-merger'), '<code>*</code>')?></p>
+						</td>
+	                </tr>
+	                <tr valign="top"><th scope="row"><label for="css_error"><?=__('Errors', 'cssjs-merger')?></label></th>
+	                    <td>
+							<textarea id="css_error" name="cssjs_merger[css_error]" cols="100" rows="8"><?=implode("\n", $options['css_error'])?></textarea>
+							<p class="description"><?=sprintf(__("Here's the list of files that coudnt be retrieved. These files are ighnored. You can delete it to try recache.", 'cssjs-merger'), '<code>*</code>')?></p>
+						</td>
+	                </tr>
+	            </table>
+				<table id="js" class="form-table" style="display: none;">
+	                <tr valign="top"><th scope="row"><label for="js_external"><?=__('Allow External?', 'cssjs-merger')?></label></th>
+	                    <td><input name="cssjs_merger[js_external]" type="checkbox" id="js_external" value="1" <?php checked(1, $options['js_external']) ?>><label for="js_external">Yes</label></td>
+	                </tr>
+	                <tr valign="top"><th scope="row"><label for="js_whitelist"><?=__('Whitelist', 'cssjs-merger')?></label></th>
+	                    <td>
+							<textarea id="js_whitelist" name="cssjs_merger[js_whitelist]" cols="100" rows="8"><?=implode("\n", $options['js_whitelist'])?></textarea>
+							<p class="description"><?=sprintf(__('Use %s as wildcard. One rule per line. If rule is matched, it will ignore the file.', 'cssjs-merger'), '<code>*</code>')?></p>
+						</td>
+	                </tr>
+	                <tr valign="top"><th scope="row"><label for="js_error"><?=__('Errors', 'cssjs-merger')?></label></th>
+	                    <td>
+							<textarea id="js_error" name="cssjs_merger[js_error]" cols="100" rows="8"><?=implode("\n", $options['js_error'])?></textarea>
+							<p class="description"><?=sprintf(__("Here's the list of files that coudnt be retrieved. These files are ighnored. You can delete it to try recache.", 'cssjs-merger'), '<code>*</code>')?></p>
 						</td>
 	                </tr>
 	            </table>
@@ -449,27 +663,29 @@ final class CSSJSS_Merger {
 	                <input type="submit" class="button-primary" value="<?php _e('Save Changes') ?>" />
 	            </p>
 	        </form>
-			<h2><?=__('Cache', 'cssjs-merger')?></h2>
-			<p><?=__("Currently there's no funcionality to remove outdated files from so you should do it manualy by clicking the button bellow.", 'cssjs-merger')?></p>
-			<p><?=__('Current cache size:', 'cssjs-merger')?> <code>
-			<?php
-				// Get folder size and format it to b/kb/mb/etc
-				$size = 0;
-			    foreach (glob(rtrim($this->cache_dir, '/').'/*', GLOB_NOSORT) as $each) {
-			        $size += is_file($each) ? filesize($each) : 0;
-			    }
-				$units = array('B', 'KB', 'MB', 'GB', 'TB');
-				$bytes = max($size, 0);
-			    $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
-			    $pow = min($pow, count($units) - 1);
-			    $bytes /= pow(1024, $pow);
+			<div id="cache" class="form-table" style="display: none;">
+				<h2><?=__('Cache', 'cssjs-merger')?></h2>
+				<p><?=__("Currently there's no funcionality to remove outdated files from so you should do it manualy by clicking the button bellow.", 'cssjs-merger')?></p>
+				<p><?=__('Current cache size:', 'cssjs-merger')?> <code>
+				<?php
+					// Get folder size and format it to b/kb/mb/etc
+					$size = 0;
+				    foreach (glob(rtrim($this->cache_dir, '/').'/*', GLOB_NOSORT) as $each) {
+				        $size += is_file($each) ? filesize($each) : 0;
+				    }
+					$units = array('B', 'KB', 'MB', 'GB', 'TB');
+					$bytes = max($size, 0);
+				    $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
+				    $pow = min($pow, count($units) - 1);
+				    $bytes /= pow(1024, $pow);
 
-			    echo round($bytes, 2) . ' ' . $units[$pow];
-			?>
-			</code></p>
-			<form action="" method="post">
-				<input type="submit" class="button-secondary" name="purge-cache" value="<?=__('Clear Cache', 'cssjs-merger')?>" />
-			</form>
+				    echo round($bytes, 2) . ' ' . $units[$pow];
+				?>
+				</code></p>
+				<form action="" method="post">
+					<input type="submit" class="button-secondary" name="purge-cache" value="<?=__('Clear Cache', 'cssjs-merger')?>" />
+				</form>
+			</div>
 	    </div>
 		<?php
 	}
