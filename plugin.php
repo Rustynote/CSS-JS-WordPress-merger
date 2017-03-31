@@ -99,32 +99,34 @@ final class CSSJSS_Merger {
 		$this->cache_dir  = WP_CONTENT_DIR.'/uploads/merger/';
 		$this->cache_url  = WP_CONTENT_URL.'/uploads/merger/';
 
+		$this->handle   = 'CSS-JS-queue-merger';
 		$this->site_url = site_url();
 
 		$this->options = wp_parse_args(get_option('cssjs_merger'), array(
 			'ignore_admin'  => false,
 			'css_external'  => true,
 			'css_whitelist' => array(
-				'*fonts.googleapis.com*'
+				'*fonts.googleapis.com*',
+				'*font-awesome*'
 			),
-			'css_error' 	=> [],
+			'css_error'    => [],
+			'js_footer'    => false,
 			'js_external'  => true,
 			'js_whitelist' => array(
 				'*cdn*'
 			),
-			'js_error' 	=> []
+			'js_error' => []
 		));
 
 		// CSS dump
-        $this->css         = new stdClass();
-        $this->css->queue   = [];
-        $this->css->handle = [];
-        $this->css->file   = '';
+        $this->css             = new stdClass();
+        $this->css->queue      = [];
+        $this->css->handle     = [];
+        $this->css->file       = '';
 		// Js dump
-        $this->js          = new stdClass();
-        $this->js->queue    = [];
-        $this->js->handle  = [];
-        $this->js->file    = '';
+        $this->js              = new stdClass();
+        $this->js->queue       = [];
+        $this->js->file        = '';
 	}
 
     /**
@@ -189,7 +191,7 @@ final class CSSJSS_Merger {
 
 		$wp_styles = wp_styles();
 		foreach($wp_styles->queue as $queue) {
-			if(in_array($queue, ['admin-bar'])) {
+			if(in_array($queue, ['admin-bar', 'dashicons'])) {
 				continue;
 			}
 
@@ -201,7 +203,7 @@ final class CSSJSS_Merger {
 		if(!file_exists($this->cache_dir.$this->css->file)) {
 			$this->minify_css();
 		}
-		wp_enqueue_style($this->basename, $this->cache_url.$this->css->file, [], $this->version, 'all');
+		wp_enqueue_style($this->handle, $this->cache_url.$this->css->file, [], $this->version, 'all');
 
 		// Js
 		$wp_scripts = wp_scripts();
@@ -213,17 +215,39 @@ final class CSSJSS_Merger {
 			$this->add_js($queue);
 		}
 
-		$this->generate_js_name();
+		$in_header = [];
+		$filename = $header_filename = '';
+		foreach($this->js->queue as $handle => $script) {
+			if(!$this->options['js_footer'] && !$script['in_footer']) {
+				$in_header[$handle] = $script;
+				$header_filename .= $handle.'_'.$script['ver'];
 
-		if(!file_exists($this->cache_dir.$this->js->file)) {
-			$this->minify_js();
+				unset($this->js->queue[$handle]);
+				continue;
+			}
+			$filename .= $handle.'_'.$script['ver'];
 		}
-		wp_enqueue_script($this->basename, $this->cache_url.$this->js->file, [], $this->version, true);
+
+		if(!$this->options['js_footer'] && !empty($header_filename)) {
+			$this->js->file = md5($header_filename).'.js';
+			if(!file_exists($this->cache_dir.$this->js->file)) {
+				$this->minify_js($in_header);
+			}
+
+			wp_enqueue_script($this->handle.'_header', $this->cache_url.$this->js->file, [], $this->version, false);
+		}
+
+		$this->js->file = md5($filename).'.js';
+		if(!file_exists($this->cache_dir.$this->js->file)) {
+			$this->minify_js($this->js->queue);
+		}
+		wp_enqueue_script($this->handle, $this->cache_url.$this->js->file, [], $this->version, true);
+
+		// echo '<pre>';print_r($this->js);exit;
 
 		// Update options with new errors if needed
 		if($this->update_options)
 			update_option('cssjs_merger', $this->options);
-
     }
 
 	/**
@@ -321,9 +345,10 @@ final class CSSJSS_Merger {
 
 		wp_dequeue_script($handle);
 
-		$this->js->handle[$handle] = $handle.($dep->ver ? '_'.$dep->ver : '');
 		$this->js->queue[$handle] = [
 			'url' => $dep->src,
+			'in_footer' => (isset($dep->extra['group']) ? true : false),
+			'ver' => (empty($dep->ver) ? '' : $dep->ver),
 			'data' => (isset($dep->extra['data']) ? $dep->extra['data'] : null)
 		];
 	}
@@ -366,7 +391,7 @@ final class CSSJSS_Merger {
 			if($queue['media'] != 'all') {
 				$content = '@media '.$queue['media'].' {'.$content.'}';
 			}
-			$css .= $content;
+			$css .= "/* Handle: $handle */".$content;
 		}
 		$css = preg_replace('!/\*[^*]*\*+([^/][^*]*\*+)*/!', '', $css);
 	    $css = str_replace(': ', ':', $css);
@@ -384,10 +409,10 @@ final class CSSJSS_Merger {
 	 *
 	 * @since 1.0.0
 	 */
-	protected function minify_js() {
-		$js = '';
-		foreach($this->js->queue as $handle => $queue) {
-			if(empty($queue['url']))
+	protected function minify_js($queue) {
+		$filename = $js = '';
+		foreach($queue as $handle => $script) {
+			if(empty($script['url']))
 				continue;
 
 			// Add http or https to url if it's needed
@@ -396,38 +421,40 @@ final class CSSJSS_Merger {
 				$protocol = 'https';
 
 			// Check if url has top level domain. If not, it's relative to current website.
-			if(!preg_match('/\..*\//', $queue['url'])) {
-				$queue['url'] = site_url($queue['url']);
+			if(!preg_match('/\..*\//', $script['url'])) {
+				$script['url'] = site_url($script['url']);
 			}
 
-			if(strpos($queue['url'], $protocol) === false) {
-				$queue['url'] = $protocol.':'.$queue['url'];
+			if(strpos($script['url'], $protocol) === false) {
+				$script['url'] = $protocol.':'.$script['url'];
 			}
 
 
-			$content = file_get_contents($queue['url']);
+			$content = file_get_contents($script['url']);
 
 			// It couldnt get content from file so add script to wp queue and
 			// add it to error options so it's skipped next time.
 			if($content === false) {
-				$this->options['js_error'][] = $queue['url'];
+				$this->options['js_error'][] = $script['url'];
 				$this->update_options = true;
 				unset($this->js->handle[$handle]);
 				wp_enqueue_script($handle);
 				continue;
 			}
 
+			$filename .= $handle.'_'.$script['ver'];
+
 			// Add data before content
-			if($queue['data']) {
-				$content = $queue['data'].$content;
+			if($script['data']) {
+				$content = $script['data'].$content;
 			}
-			$js .= $content;
+			$js .= "\r\n/*!\r\n Handle: $handle\r\n URL: $script[url]\r\n*/\r\n".$content;
 		}
 
 		require_once $this->plugin_dir.'/JShrink-1.1.0/Minifier.php';
 		$js = \JShrink\Minifier::minify($js);
 
-		$this->generate_js_name();
+		$this->js->file = md5($filename).'.js';
 
         $file = fopen($this->cache_dir.$this->js->file, 'w+');
 		fwrite($file, $js);
@@ -469,21 +496,20 @@ final class CSSJSS_Merger {
 		$replace = [];
 
 		// find all urls and ignore quotes
-		preg_match_all('/url\((?!\s*([\'"]?(((?:https?:)?\/\/)|(?:data\:?:))))\s*(.+?)\)/', $content, $matched, PREG_SET_ORDER);
+		preg_match_all('/url\((?!\s*([\'"]?(((?:https?:)?\/\/)|(?:data\:?:)|(?:#))))\s*(.+?)\)/', $content, $matched, PREG_SET_ORDER);
 		if($matched) {
 			foreach($matched as $match) {
 				$match = array_filter($match);
-				$url = preg_replace('/[\'"]/', '', end($match));
-
+				$url = str_replace(['"', "'"], '', end($match));
 				$path = $dirstruc;
 
 				// TODO: Fix this mess of a code. It's not self explanatory. At
 				//       least comment it out.
 
 				// Check if file is in different folder
-				preg_match('/\.\./', end($match), $mach);
+				preg_match('/\.\./', $url, $mach);
 				if($mach && !empty($mach)) {
-					$location = explode('/', end($match));
+					$location = explode('/', $url);
 					foreach($mach as $key => $part) {
 						unset($path[$key]);
 						unset($location[$key]);
@@ -497,7 +523,7 @@ final class CSSJSS_Merger {
 					$path = trailingslashit($dir);
 				}
 
-				$replace[end($match)] = $path.$location;
+				$replace[end($match)] = "'".$path.$location."'";
 			}
 		}
 
@@ -562,6 +588,7 @@ final class CSSJSS_Merger {
 		foreach($old as $key => $val) {
 			switch($key) {
 				case 'css_external':
+				case 'js_footer':
 				case 'js_external':
 				case 'ignore_admin':
 					$val = 1;
@@ -576,7 +603,7 @@ final class CSSJSS_Merger {
 			}
 			$new[$key] = $val;
 		}
-
+		echo '<pre>';print_r($new);exit;
 		return $new;
 	}
 
@@ -643,6 +670,10 @@ final class CSSJSS_Merger {
 	                </tr>
 	            </table>
 				<table id="js" class="form-table" style="display: none;">
+	                <tr valign="top"><th scope="row"><label for="js_footer"><?=__('Move to footer', 'cssjs-merger')?></label></th>
+	                    <td><input name="cssjs_merger[js_footer]" type="checkbox" id="js_footer" value="1" <?php checked(1, $options['js_footer']) ?>><label for="js_footer">Yes</label>
+						<p class="description"><?=sprintf(__("Some themes/plugins are lousy made so it will try to run js as page is loading in the middle of the content. If you have <code style='color:red'>jQuery is not defined</code> error, then uncheck this option.", 'cssjs-merger'), '<code>*</code>')?></p></td>
+	                </tr>
 	                <tr valign="top"><th scope="row"><label for="js_external"><?=__('Allow External?', 'cssjs-merger')?></label></th>
 	                    <td><input name="cssjs_merger[js_external]" type="checkbox" id="js_external" value="1" <?php checked(1, $options['js_external']) ?>><label for="js_external">Yes</label></td>
 	                </tr>
@@ -655,7 +686,7 @@ final class CSSJSS_Merger {
 	                <tr valign="top"><th scope="row"><label for="js_error"><?=__('Errors', 'cssjs-merger')?></label></th>
 	                    <td>
 							<textarea id="js_error" name="cssjs_merger[js_error]" cols="100" rows="8"><?=implode("\n", $options['js_error'])?></textarea>
-							<p class="description"><?=sprintf(__("Here's the list of files that coudnt be retrieved. These files are ighnored. You can delete it to try recache.", 'cssjs-merger'), '<code>*</code>')?></p>
+							<p class="description"><?=sprintf(__("Here's the list of files that coudnt be retrieved. These files are ighnored. You can delete it to try recaching the files.", 'cssjs-merger'), '<code>*</code>')?></p>
 						</td>
 	                </tr>
 	            </table>
