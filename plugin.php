@@ -143,11 +143,23 @@ final class CSSJSS_Merger {
 			add_action('plugin_action_links_'.$this->basename, array($this, 'plugin_action_links'));
 		}
 
+		// This class is initialized with priority 10 on init so 11 should do.
+		add_action('init', array($this, 'load_textdomain'), 11);
+
 		if($this->options['ignore_admin'] && current_user_can('administrator'))
 			return;
 
 		add_action('wp_enqueue_scripts', array($this, 'run_cache_last'));
     }
+
+	/**
+	 * Load plugin textdomain.
+	 *
+	 * @since 1.0.0
+	 */
+	public function load_textdomain() {
+	  	load_plugin_textdomain('cssjs-merger', false, basename( dirname( __FILE__ ) ) . '/languages' );
+	}
 
     /**
      * Create cache folder if it doesn't exist on plugin activation
@@ -186,9 +198,10 @@ final class CSSJSS_Merger {
      * @since v1.0.0
      */
     public function cache_prepare() {
-		// In case if folder was deleted
+		// Create cache folder case it was deleted
 		$this->activation();
 
+		// Run through queued css
 		$wp_styles = wp_styles();
 		foreach($wp_styles->queue as $queue) {
 			if(in_array($queue, ['admin-bar', 'dashicons'])) {
@@ -198,14 +211,17 @@ final class CSSJSS_Merger {
 			$this->add_css($queue);
 		}
 
+		// Generate name for css so we can check if file exists and create file
+		// if it donesn't.
 		$this->generate_css_name();
-
 		if(!file_exists($this->cache_dir.$this->css->file)) {
 			$this->minify_css();
 		}
+
+		// Enqueue Style
 		wp_enqueue_style($this->handle, $this->cache_url.$this->css->file, [], $this->version, 'all');
 
-		// Js
+		// Run through queued js
 		$wp_scripts = wp_scripts();
 		foreach($wp_scripts->queue as $queue) {
 			if(in_array($queue, ['admin-bar'])) {
@@ -215,6 +231,8 @@ final class CSSJSS_Merger {
 			$this->add_js($queue);
 		}
 
+
+		// Separate header and footer scripts and create filename string for each
 		$in_header = [];
 		$filename = $header_filename = '';
 		foreach($this->js->queue as $handle => $script) {
@@ -228,6 +246,7 @@ final class CSSJSS_Merger {
 			$filename .= $handle.'_'.$script['ver'];
 		}
 
+		// Create and enqueue header scripts
 		if(!$this->options['js_footer'] && !empty($header_filename)) {
 			$this->js->file = md5($header_filename).'.js';
 			if(!file_exists($this->cache_dir.$this->js->file)) {
@@ -237,13 +256,12 @@ final class CSSJSS_Merger {
 			wp_enqueue_script($this->handle.'_header', $this->cache_url.$this->js->file, [], $this->version, false);
 		}
 
+		// Create and enqueue footer scripts
 		$this->js->file = md5($filename).'.js';
 		if(!file_exists($this->cache_dir.$this->js->file)) {
 			$this->minify_js($this->js->queue);
 		}
 		wp_enqueue_script($this->handle, $this->cache_url.$this->js->file, [], $this->version, true);
-
-		// echo '<pre>';print_r($this->js);exit;
 
 		// Update options with new errors if needed
 		if($this->update_options)
@@ -251,26 +269,27 @@ final class CSSJSS_Merger {
     }
 
 	/**
-	 * Add url and dependencies to the queue
+	 * Add style and dependencies to the queue
 	 *
 	 * @since 1.0.0
 	 * @var string $handle Style handle from wp_register_script.
 	 */
 	protected function add_css($handle) {
+		// Do nothing if style is not registered
 		$wp_styles = wp_styles();
 		if(!isset($wp_styles->registered[$handle]))
 			return;
 
-		$dep = $wp_styles->registered[$handle];
+		$style = $wp_styles->registered[$handle];
 
 		// Return if there's condition. probbly if IEx. There's no need to
 		// include css intended for specific browser.
-		if(isset($dep->extra['conditional']))
+		if(isset($style->extra['conditional']))
 			return;
 
 		// Check if css is external and if it's allowed, if not skip and enqueue
-		// style just in case if it's dependency.
-		if(!$this->options['css_external'] && strpos($dep->src, $this->site_url) === false) {
+		// style just in case if style is a dependency.
+		if(!$this->options['css_external'] && strpos($style->src, $this->site_url) === false) {
 			wp_enqueue_style($handle);
 			return;
 		}
@@ -278,7 +297,7 @@ final class CSSJSS_Merger {
 		// If external is allowed, check the whitelist.
 		if(!empty($this->options['css_whitelist']) || !empty($this->options['css_error'])) {
 			foreach($this->options['css_whitelist'] + $this->options['css_error'] as $exeption) {
-				if(fnmatch($exeption, $dep->src)) {
+				if(fnmatch($exeption, $style->src)) {
 					wp_enqueue_style($handle);
 					return;
 				}
@@ -286,42 +305,45 @@ final class CSSJSS_Merger {
 		}
 
 		// Add dependencies before main file
-		if(!empty($dep->deps)) {
-			foreach($dep->deps as $queue) {
+		if(!empty($style->deps)) {
+			foreach($style->deps as $queue) {
 				$this->add_css($queue);
 			}
 		}
 
+		// Unqueue the style
 		wp_dequeue_style($handle);
 
-		$this->css->handle[$handle] = $handle.($dep->ver ? '_'.$dep->ver : '');
+		// Add style data to plugin queue
+		$this->css->handle[$handle] = $handle.($style->ver ? '_'.$style->ver : '');
 		$this->css->queue[$handle] = [
-			'url' => $dep->src,
-			'media' => $dep->args
+			'url' => $style->src,
+			'media' => $style->args
 		];
 	}
 
 	/**
-	 * Add url and dependencies to the queue
+	 * Add script and dependencies to the queue
 	 *
 	 * @since 1.0.0
-	 * @var string $handle Style handle from wp_register_script.
+	 * @var string $handle Script handle from wp_register_script.
 	 */
 	protected function add_js($handle) {
+		// Do nothing if style is not registered
 		$wp_scripts = wp_scripts();
 		if(!isset($wp_scripts->registered[$handle]))
 			return;
 
-		$dep = $wp_scripts->registered[$handle];
+		$script = $wp_scripts->registered[$handle];
 
 		// Return if there's condition. probbly if IEx. There's no need to
 		// include css intended for specific browser.
-		if(isset($dep->extra['conditional']))
+		if(isset($script->extra['conditional']))
 			return;
 
 		// Check if js is external and if it's allowed, if not skip and enqueue
 		// style just in case if it's dependency.
-		if(!$this->options['js_external'] && strpos($dep->src, $this->site_url) === false) {
+		if(!$this->options['js_external'] && strpos($script->src, $this->site_url) === false) {
 			wp_enqueue_script($handle);
 			return;
 		}
@@ -329,7 +351,7 @@ final class CSSJSS_Merger {
 		// If external is allowed, check the whitelist.
 		if(!empty($this->options['js_whitelist']) || !empty($this->options['js_error'])) {
 			foreach($this->options['js_whitelist'] + $this->options['js_error'] as $exeption) {
-				if(fnmatch($exeption, $dep->src)) {
+				if(fnmatch($exeption, $script->src)) {
 					wp_enqueue_script($handle);
 					return;
 				}
@@ -337,19 +359,21 @@ final class CSSJSS_Merger {
 		}
 
 		// Add dependencies before main file
-		if(!empty($dep->deps)) {
-			foreach($dep->deps as $queue) {
+		if(!empty($script->deps)) {
+			foreach($script->deps as $queue) {
 				$this->add_js($queue);
 			}
 		}
 
+		// Unqueue the script
 		wp_dequeue_script($handle);
 
+		// Add script data to the plugin var
 		$this->js->queue[$handle] = [
-			'url' => $dep->src,
-			'in_footer' => (isset($dep->extra['group']) ? true : false),
-			'ver' => (empty($dep->ver) ? '' : $dep->ver),
-			'data' => (isset($dep->extra['data']) ? $dep->extra['data'] : null)
+			'url' => $script->src,
+			'in_footer' => (isset($script->extra['group']) ? true : false),
+			'ver' => (empty($script->ver) ? '' : $script->ver),
+			'data' => (isset($script->extra['data']) ? $script->extra['data'] : null)
 		];
 	}
 
@@ -361,6 +385,7 @@ final class CSSJSS_Merger {
 	protected function minify_css() {
 		$css = '';
 		foreach($this->css->queue as $handle => $queue) {
+			// Skip the loop if there's no url
 			if(empty($queue['url']))
 				continue;
 
@@ -373,6 +398,7 @@ final class CSSJSS_Merger {
 				$queue['url'] = $protocol.':'.$queue['url'];
 			}
 
+			// Get the css
 			$content = file_get_contents($queue['url']);
 
 			// It couldnt get content from file so add style to wp queue and
@@ -385,20 +411,25 @@ final class CSSJSS_Merger {
 				continue;
 			}
 
+			// Convert relative URLs to absolute
 			$content = $this->rel_to_abs($content, $queue['url']);
 
-			// Add media query if it's not all
+			// Add media query if media is not all
 			if($queue['media'] != 'all') {
 				$content = '@media '.$queue['media'].' {'.$content.'}';
 			}
-			$css .= "/* Handle: $handle */".$content;
+			// Add style handle to the beggining of css so it's easier to find
+			// what file is causing the problems.
+			$css .= "/*! Handle: $handle */".$content;
 		}
-		$css = preg_replace('!/\*[^*]*\*+([^/][^*]*\*+)*/!', '', $css);
+		// Minify the css but preserve important comments
+		$css = preg_replace('!/\*[^\!]*\*+([^/][^*]*\*+)*/!', '', $css);
 	    $css = str_replace(': ', ':', $css);
 	    $css = str_replace(array("\r\n", "\r", "\n", "\t", '  ', '    ', '    '), '', $css);
 
 		$this->generate_css_name();
 
+		// Write the file
         $file = fopen($this->cache_dir.$this->css->file, 'w+');
 		fwrite($file, $css);
 		fclose($file);
@@ -429,7 +460,7 @@ final class CSSJSS_Merger {
 				$script['url'] = $protocol.':'.$script['url'];
 			}
 
-
+			// Get content of the script
 			$content = file_get_contents($script['url']);
 
 			// It couldnt get content from file so add script to wp queue and
@@ -442,18 +473,23 @@ final class CSSJSS_Merger {
 				continue;
 			}
 
+			// Append handle and version to the filename variable.
 			$filename .= $handle.'_'.$script['ver'];
 
 			// Add data before content
 			if($script['data']) {
 				$content = $script['data'].$content;
 			}
-			$js .= "\r\n/*!\r\n Handle: $handle\r\n URL: $script[url]\r\n*/\r\n".$content;
+
+			// Add script informations for debuging purpose.
+			$js .= "\r\n/*!\r\n Handle: $handle\r\n Version: $script[ver]\r\n URL: $script[url]\r\n*/\r\n".$content;
 		}
 
+		// Include JShrink Minifier.
 		require_once $this->plugin_dir.'/JShrink-1.1.0/Minifier.php';
 		$js = \JShrink\Minifier::minify($js);
 
+		// Add filename to this variable so it can enqueue it in $this->cache_prepare().
 		$this->js->file = md5($filename).'.js';
 
         $file = fopen($this->cache_dir.$this->js->file, 'w+');
@@ -472,16 +508,6 @@ final class CSSJSS_Merger {
 	}
 
 	/**
-	 * Generate js file name.
-	 *
-	 * @since 1.0.0
-	 */
-	protected function generate_js_name() {
-		$handle = implode(';', $this->js->handle);
-		$this->js->file = md5($handle).'.js';
-	}
-
-	/**
 	 * Convert relative url to absolute.
 	 *
 	 * @since 1.0.0
@@ -489,44 +515,57 @@ final class CSSJSS_Merger {
 	 * @var string $url File url
 	 */
 	protected function rel_to_abs($content, $url) {
+		// Get file directory
 		$dir = dirname($url);
-		$dirstruc = explode('/', $url);
-		$dirstruc = array_reverse($dirstruc);
+		// Split the url by slash and reverse it so it's easier to replace the ..
+		// with directory name.
+		$dirstructure = explode('/', $url);
+		$dirstructure = array_reverse($dirstructure);
 
+		// Variable to store $relative => $absolute urls.
 		$replace = [];
 
 		// find all urls and ignore quotes
 		preg_match_all('/url\((?!\s*([\'"]?(((?:https?:)?\/\/)|(?:data\:?:)|(?:#))))\s*(.+?)\)/', $content, $matched, PREG_SET_ORDER);
 		if($matched) {
 			foreach($matched as $match) {
+				// Filter empty/false vars and replace quotes if regex included them.
 				$match = array_filter($match);
 				$url = str_replace(['"', "'"], '', end($match));
-				$path = $dirstruc;
-
-				// TODO: Fix this mess of a code. It's not self explanatory. At
-				//       least comment it out.
+				$path = $dirstructure;
 
 				// Check if file is in different folder
 				preg_match('/\.\./', $url, $mach);
 				if($mach && !empty($mach)) {
+					// Loop through '..', unset said '..', and unset correpsponding
+					// directory from the url
 					$location = explode('/', $url);
 					foreach($mach as $key => $part) {
 						unset($path[$key]);
 						unset($location[$key]);
 					}
 
+					// Reverse, merge, and add slash at the end. This variable
+					// after everything should look like /folder/sub/file.ext
+					// folder and sub were double periods.
 					$path = array_reverse($path);
 					$path = trailingslashit(implode('/', $path));
+					// Merge folders with slash. This variable should be url
+					// until folder in $path.
 					$location = implode('/', $location);
 				} else {
+					// File is in the same directory as stylesheet.
 					$location = $url;
 					$path = trailingslashit($dir);
 				}
 
+				// Add $relative => $absolute to variable and wrap absolute url
+				// in single quotes.
 				$replace[end($match)] = "'".$path.$location."'";
 			}
 		}
 
+		// Loop through variable and replace relative url with absolute url.
 		if(!empty($replace)) {
 			foreach($replace as $rel => $abs) {
 				$content = str_replace($rel, $abs, $content);
@@ -554,6 +593,7 @@ final class CSSJSS_Merger {
 	public function admin_init() {
 		register_setting('cssjs_merger', 'cssjs_merger', array($this, 'validate'));
 
+		// Delete cache if button is clicked.
 		if(isset($_GET['page']) && $_GET['page'] == 'cssjs_merger' && isset($_POST['purge-cache'])) {
 			$this->purge_cache();
 		}
