@@ -643,7 +643,6 @@ final class CSSJSS_Merger {
 			}
 			$new[$key] = $val;
 		}
-		echo '<pre>';print_r($new);exit;
 		return $new;
 	}
 
