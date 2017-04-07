@@ -4,4 +4,4 @@ For this plugin to work as intended, styles and js must be properly enqueued. Pl
 
 Scripts can be split to include in header or footer, or include them in footer only.
 
-####This just merges and minifys the files so if there's syntax error somewhere, it will probably break everything.
+#### This just merges and minifys the files so if there's syntax error somewhere, it will probably break everything.
