@@ -422,10 +422,28 @@ final class CSSJSS_Merger {
 			// what file is causing the problems.
 			$css .= "/*! Handle: $handle */".$content;
 		}
+
+		//define('MINIFY_STRING', '"(?:[^"\\\]|\\\.)*"|\'(?:[^\'\\\]|\\\.)*\'');
+		//define('MINIFY_COMMENT_CSS', '/\*[\s\S]*?\*/');
+		//
+		//https://gist.github.com/tovic/d7b310dea3b33e4732c0
+
 		// Minify the css but preserve important comments
-		$css = preg_replace('!/\*[^\!]*\*+([^/][^*]*\*+)*/!', '', $css);
-	    $css = str_replace(': ', ':', $css);
-	    $css = str_replace(array("\r\n", "\r", "\n", "\t", '  ', '    ', '    '), '', $css);
+		// $css = preg_replace('!/\*[^\!]*\*+([^/][^*]*\*+)*/!', '', $css);
+	    // $css = str_replace(': ', ':', $css);
+	    // $css = str_replace(array("\r\n", "\r", "\n", "\t", '  ', '    ', '    '), '', $css);
+
+		// comments
+		$css = preg_replace('#/\*(?!!).*?\*/#s','', $css);
+		$css = preg_replace('/\n\s*\n/',"\n", $css);
+
+		// space
+		$css = preg_replace('/[\n\r \t]/',' ', $css);
+		$css = preg_replace('/ +/',' ', $css);
+		$css = preg_replace('/ ?([,:;{}]) ?/','$1', $css);
+
+		// trailing;
+		$css = preg_replace('/;}/','}', $css);
 
 		$this->generate_css_name();
 
@@ -697,13 +715,13 @@ final class CSSJSS_Merger {
 	                </tr>
 	                <tr valign="top"><th scope="row"><label for="css_whitelist"><?=__('Whitelist', 'cssjs-merger')?></label></th>
 	                    <td>
-							<textarea id="css_whitelist" name="cssjs_merger[css_whitelist]" cols="100" rows="8"><?=implode("\n", $options['css_whitelist'])?></textarea>
+							<textarea id="css_whitelist" name="cssjs_merger[css_whitelist]" cols="100" rows="8"><?=implode("\n", (array)$options['css_whitelist'])?></textarea>
 							<p class="description"><?=sprintf(__('Use %s as wildcard. One rule per line. If rule is matched, it will ignore the file.', 'cssjs-merger'), '<code>*</code>')?></p>
 						</td>
 	                </tr>
 	                <tr valign="top"><th scope="row"><label for="css_error"><?=__('Errors', 'cssjs-merger')?></label></th>
 	                    <td>
-							<textarea id="css_error" name="cssjs_merger[css_error]" cols="100" rows="8"><?=implode("\n", $options['css_error'])?></textarea>
+							<textarea id="css_error" name="cssjs_merger[css_error]" cols="100" rows="8"><?=implode("\n", (array)$options['css_error'])?></textarea>
 							<p class="description"><?=sprintf(__("Here's the list of files that coudnt be retrieved. These files are ighnored. You can delete it to try recache.", 'cssjs-merger'), '<code>*</code>')?></p>
 						</td>
 	                </tr>
@@ -718,13 +736,13 @@ final class CSSJSS_Merger {
 	                </tr>
 	                <tr valign="top"><th scope="row"><label for="js_whitelist"><?=__('Whitelist', 'cssjs-merger')?></label></th>
 	                    <td>
-							<textarea id="js_whitelist" name="cssjs_merger[js_whitelist]" cols="100" rows="8"><?=implode("\n", $options['js_whitelist'])?></textarea>
+							<textarea id="js_whitelist" name="cssjs_merger[js_whitelist]" cols="100" rows="8"><?=implode("\n", (array)$options['js_whitelist'])?></textarea>
 							<p class="description"><?=sprintf(__('Use %s as wildcard. One rule per line. If rule is matched, it will ignore the file.', 'cssjs-merger'), '<code>*</code>')?></p>
 						</td>
 	                </tr>
 	                <tr valign="top"><th scope="row"><label for="js_error"><?=__('Errors', 'cssjs-merger')?></label></th>
 	                    <td>
-							<textarea id="js_error" name="cssjs_merger[js_error]" cols="100" rows="8"><?=implode("\n", $options['js_error'])?></textarea>
+							<textarea id="js_error" name="cssjs_merger[js_error]" cols="100" rows="8"><?=implode("\n", (array)$options['js_error'])?></textarea>
 							<p class="description"><?=sprintf(__("Here's the list of files that coudnt be retrieved. These files are ighnored. You can delete it to try recaching the files.", 'cssjs-merger'), '<code>*</code>')?></p>
 						</td>
 	                </tr>
