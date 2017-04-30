@@ -119,14 +119,16 @@ final class CSSJSS_Merger {
 		));
 
 		// CSS dump
-        $this->css             = new stdClass();
-        $this->css->queue      = [];
-        $this->css->handle     = [];
-        $this->css->file       = '';
+        $this->css         = new stdClass();
+        $this->css->queue  = [];
+        $this->css->handle = [];
+        $this->css->file   = '';
 		// Js dump
-        $this->js              = new stdClass();
-        $this->js->queue       = [];
-        $this->js->file        = '';
+        $this->js          = new stdClass();
+        $this->js->queue   = [];
+        $this->js->queued  = [];
+        $this->js->handle  = [];
+        $this->js->file    = '';
 	}
 
     /**
@@ -182,25 +184,39 @@ final class CSSJSS_Merger {
      * @since v1.0.0
      */
     public function run_cache_last() {
-		if(empty($GLOBALS['wp_filter']['wp_enqueue_scripts'])) {
-	        $priority = PHP_INT_MAX;
-		} else {
-			$functions = array_keys($GLOBALS['wp_filter']['wp_enqueue_scripts']->callbacks);
-		    $priority = end($functions);
-		}
-
-		add_action('wp_enqueue_scripts', array($this, 'cache_prepare'), $priority);
-    }
-
-    /**
-     * Create cache folder if it doesn't exist on plugin activation
-     *
-     * @since v1.0.0
-     */
-    public function cache_prepare() {
 		// Create cache folder case it was deleted
 		$this->activation();
 
+		add_action('wp_enqueue_scripts', array($this, 'styles'), $this->get_last_priority('wp_enqueue_scripts'));
+		if(!$this->options['js_footer'])
+			add_action('wp_enqueue_scripts', array($this, 'scripts_header'), $this->get_last_priority('wp_enqueue_scripts'));
+
+		add_action('wp_footer', array($this, 'scripts_footer'));
+    }
+
+	/**
+	 * Return biggest priority for $filter.
+	 *
+	 * @since 1.0.0
+	 * @var strong $filter Filter name
+	 */
+	public function get_last_priority($filter) {
+		if(empty($GLOBALS['wp_filter'][$filter])) {
+			$priority = PHP_INT_MAX;
+		} else {
+			$functions = array_keys($GLOBALS['wp_filter'][$filter]->callbacks);
+			$priority = end($functions);
+		}
+
+		return $priority;
+	}
+
+	/**
+	 * Loop through queued css, merge it, and minify it.
+	 *
+	 * @since 1.0.0
+	 */
+	public function styles() {
 		// Run through queued css
 		$wp_styles = wp_styles();
 		foreach($wp_styles->queue as $queue) {
@@ -220,53 +236,73 @@ final class CSSJSS_Merger {
 
 		// Enqueue Style
 		wp_enqueue_style($this->handle, $this->cache_url.$this->css->file, [], $this->version, 'all');
+	}
 
+	/**
+	 * Loop through queued header scripts, merge it, and minify it.
+	 *
+	 * @since 1.0.0
+	 */
+	public function scripts_header() {
 		// Run through queued js
 		$wp_scripts = wp_scripts();
 		foreach($wp_scripts->queue as $queue) {
-			if(in_array($queue, ['admin-bar'])) {
+			$script = $wp_scripts->registered[$queue];
+			if(in_array($queue, ['admin-bar']) || isset($script->extra['group'])) {
 				continue;
 			}
 
 			$this->add_js($queue);
 		}
 
+		// There are no scripts for header.
+		if(empty($this->js->queue))
+			return;
 
-		// Separate header and footer scripts and create filename string for each
-		$in_header = [];
-		$filename = $header_filename = '';
-		foreach($this->js->queue as $handle => $script) {
-			if(!$this->options['js_footer'] && !$script['in_footer']) {
-				$in_header[$handle] = $script;
-				$header_filename .= $handle.'_'.$script['ver'];
+		$this->generate_js_name();
+		if(!file_exists($this->cache_dir.$this->js->file)) {
+			$this->minify_js();
+		}
 
-				unset($this->js->queue[$handle]);
+		wp_enqueue_script($this->handle.'_header', $this->cache_url.$this->js->file, [], $this->version, false);
+	}
+
+	/**
+	 * Loop through queued footer scripts, merge it, and minify it.
+	 *
+	 * @since 1.0.0
+	 */
+	public function scripts_footer() {
+		// Reset variables just in case
+        $this->js->queue  = [];
+        $this->js->handle = [];
+        $this->js->file   = '';
+
+		// Run through queued js
+		$wp_scripts = wp_scripts();
+		foreach($wp_scripts->queue as $queue) {
+			if(in_array($queue, ['admin-bar', 'CSS-JS-queue-merger_header']) || array_key_exists($queue, $this->js->queued)) {
 				continue;
 			}
-			$filename .= $handle.'_'.$script['ver'];
+
+			$this->add_js($queue);
 		}
 
-		// Create and enqueue header scripts
-		if(!$this->options['js_footer'] && !empty($header_filename)) {
-			$this->js->file = md5($header_filename).'.js';
-			if(!file_exists($this->cache_dir.$this->js->file)) {
-				$this->minify_js($in_header);
-			}
+		// There are no scripts for footer.
+		if(empty($this->js->queue))
+			return;
 
-			wp_enqueue_script($this->handle.'_header', $this->cache_url.$this->js->file, [], $this->version, false);
-		}
-
-		// Create and enqueue footer scripts
-		$this->js->file = md5($filename).'.js';
+		$this->generate_js_name();
 		if(!file_exists($this->cache_dir.$this->js->file)) {
-			$this->minify_js($this->js->queue);
+			$this->minify_js();
 		}
+
 		wp_enqueue_script($this->handle, $this->cache_url.$this->js->file, [], $this->version, true);
 
 		// Update options with new errors if needed
 		if($this->update_options)
 			update_option('cssjs_merger', $this->options);
-    }
+	}
 
 	/**
 	 * Add style and dependencies to the queue
@@ -329,9 +365,9 @@ final class CSSJSS_Merger {
 	 * @var string $handle Script handle from wp_register_script.
 	 */
 	protected function add_js($handle) {
-		// Do nothing if style is not registered
+		// Do nothing if style is not registered of script is already queued
 		$wp_scripts = wp_scripts();
-		if(!isset($wp_scripts->registered[$handle]))
+		if(!isset($wp_scripts->registered[$handle]) || array_key_exists($handle, $this->js->queued))
 			return;
 
 		$script = $wp_scripts->registered[$handle];
@@ -365,16 +401,18 @@ final class CSSJSS_Merger {
 			}
 		}
 
-		// Unqueue the script
-		wp_dequeue_script($handle);
-
 		// Add script data to the plugin var
+		$this->js->queued[$handle] = 1;
+		$this->js->handle[$handle] = $handle.($script->ver ? '_'.$script->ver : '');
 		$this->js->queue[$handle] = [
 			'url' => $script->src,
-			'in_footer' => (isset($script->extra['group']) ? true : false),
 			'ver' => (empty($script->ver) ? '' : $script->ver),
 			'data' => (isset($script->extra['data']) ? $script->extra['data'] : null)
 		];
+
+		// Unset the url instead of dequeuing the script. There's a chance script
+		// will be enqueued somewhere so it beats the purpose of the plugin.
+		$wp_scripts->registered[$handle]->src = '';
 	}
 
 	/**
@@ -423,16 +461,6 @@ final class CSSJSS_Merger {
 			$css .= "/*! Handle: $handle */".$content;
 		}
 
-		//define('MINIFY_STRING', '"(?:[^"\\\]|\\\.)*"|\'(?:[^\'\\\]|\\\.)*\'');
-		//define('MINIFY_COMMENT_CSS', '/\*[\s\S]*?\*/');
-		//
-		//https://gist.github.com/tovic/d7b310dea3b33e4732c0
-
-		// Minify the css but preserve important comments
-		// $css = preg_replace('!/\*[^\!]*\*+([^/][^*]*\*+)*/!', '', $css);
-	    // $css = str_replace(': ', ':', $css);
-	    // $css = str_replace(array("\r\n", "\r", "\n", "\t", '  ', '    ', '    '), '', $css);
-
 		// comments
 		$css = preg_replace('#/\*(?!!).*?\*/#s','', $css);
 		$css = preg_replace('/\n\s*\n/',"\n", $css);
@@ -458,9 +486,9 @@ final class CSSJSS_Merger {
 	 *
 	 * @since 1.0.0
 	 */
-	protected function minify_js($queue) {
-		$filename = $js = '';
-		foreach($queue as $handle => $script) {
+	protected function minify_js() {
+		$js = '';
+		foreach($this->js->queue as $handle => $script) {
 			if(empty($script['url']))
 				continue;
 
@@ -486,13 +514,10 @@ final class CSSJSS_Merger {
 			if($content === false) {
 				$this->options['js_error'][] = $script['url'];
 				$this->update_options = true;
-				unset($this->js->handle[$handle]);
+				unset($this->js->handle[$handle], $this->js->queued[$handle]);
 				wp_enqueue_script($handle);
 				continue;
 			}
-
-			// Append handle and version to the filename variable.
-			$filename .= $handle.'_'.$script['ver'];
 
 			// Add data before content
 			if($script['data']) {
@@ -507,8 +532,7 @@ final class CSSJSS_Merger {
 		require_once $this->plugin_dir.'/JShrink-1.1.0/Minifier.php';
 		$js = \JShrink\Minifier::minify($js);
 
-		// Add filename to this variable so it can enqueue it in $this->cache_prepare().
-		$this->js->file = md5($filename).'.js';
+		$this->generate_js_name();
 
         $file = fopen($this->cache_dir.$this->js->file, 'w+');
 		fwrite($file, $js);
@@ -523,6 +547,16 @@ final class CSSJSS_Merger {
 	protected function generate_css_name() {
 		$handle = implode(';', $this->css->handle);
 		$this->css->file = md5($handle).'.css';
+	}
+
+	/**
+	 * Generate js file name.
+	 *
+	 * @since 1.0.0
+	 */
+	protected function generate_js_name() {
+		$handle = implode(';', $this->js->handle);
+		$this->js->file = md5($handle).'.js';
 	}
 
 	/**
@@ -600,7 +634,8 @@ final class CSSJSS_Merger {
 	 */
 	public function purge_cache() {
 		array_map('unlink', glob($this->cache_dir.'*.*'));
-		rmdir($this->cache_dir);
+		if(file_exists($this->cache_dir))
+			rmdir($this->cache_dir);
 	}
 
 	/**
@@ -614,6 +649,13 @@ final class CSSJSS_Merger {
 		// Delete cache if button is clicked.
 		if(isset($_GET['page']) && $_GET['page'] == 'cssjs_merger' && isset($_POST['purge-cache'])) {
 			$this->purge_cache();
+
+			add_settings_error(
+		        'cssjs_merger_error',
+		        esc_attr('settings_updated'),
+		        __('Cache Cleared', 'cssjs-merger'),
+		        'updated'
+		    );
 		}
 	}
 
@@ -623,7 +665,8 @@ final class CSSJSS_Merger {
 	 * @since 1.0.0
 	 */
 	public function admin_menu() {
-		add_options_page(__('Queue Merger', 'cssjs-merger'), __('CSSJS Queue Merger', 'cssjs-merger'), 'manage_options', 'cssjs_merger', array($this, 'page_content'));
+		add_submenu_page('options-general.php', __('Queue Merger', 'cssjs-merger'), __('CSSJS Queue Merger', 'cssjs-merger'), 'manage_options', 'cssjs_merger', array($this, 'page_content'));
+		// add_options_page(__('Queue Merger', 'cssjs-merger'), __('CSSJS Queue Merger', 'cssjs-merger'), 'manage_options', 'cssjs_merger', array($this, 'page_content'));
 	}
 
 	/**
@@ -642,24 +685,32 @@ final class CSSJSS_Merger {
 	 */
 	public function validate($old) {
 		$new = [];
+		if(isset($_POST['reset'])) {
+			add_settings_error(
+		        'cssjs_merger_error',
+		        esc_attr( 'settings_updated' ),
+		        __('Restored Default Settings', 'cssjs-merger'),
+		        'updated'
+		    );
+		} else {
+			foreach($old as $key => $val) {
+				switch($key) {
+					case 'css_external':
+					case 'js_footer':
+					case 'js_external':
+					case 'ignore_admin':
+						$val = 1;
+						break;
+					case 'css_whitelist':
+					case 'css_error':
+					case 'js_whitelist':
+					case 'js_error':
+						$val = explode("\n", $val);
+						break;
 
-		foreach($old as $key => $val) {
-			switch($key) {
-				case 'css_external':
-				case 'js_footer':
-				case 'js_external':
-				case 'ignore_admin':
-					$val = 1;
-					break;
-				case 'css_whitelist':
-				case 'css_error':
-				case 'js_whitelist':
-				case 'js_error':
-					$val = explode("\n", $val);
-					break;
-
+				}
+				$new[$key] = $val;
 			}
-			$new[$key] = $val;
 		}
 		return $new;
 	}
@@ -749,6 +800,7 @@ final class CSSJSS_Merger {
 	            </table>
 	            <p class="submit">
 	                <input type="submit" class="button-primary" value="<?php _e('Save Changes') ?>" />
+	                <input type="submit" class="button-secondary" name="reset" value="<?php _e('Restore Defaults') ?>" />
 	            </p>
 	        </form>
 			<div id="cache" class="form-table" style="display: none;">
