@@ -248,11 +248,11 @@ final class CSSJSS_Merger {
 		$wp_scripts = wp_scripts();
 		foreach($wp_scripts->queue as $queue) {
 			$script = $wp_scripts->registered[$queue];
-			if(in_array($queue, ['admin-bar']) || isset($script->extra['group'])) {
+			if(in_array($queue, ['admin-bar'])) {
 				continue;
 			}
 
-			$this->add_js($queue);
+			$this->add_js($queue, false);
 		}
 
 		// There are no scripts for header.
@@ -364,7 +364,7 @@ final class CSSJSS_Merger {
 	 * @since 1.0.0
 	 * @var string $handle Script handle from wp_register_script.
 	 */
-	protected function add_js($handle) {
+	protected function add_js($handle, $in_footer = true) {
 		// Do nothing if style is not registered of script is already queued
 		$wp_scripts = wp_scripts();
 		if(!isset($wp_scripts->registered[$handle]) || array_key_exists($handle, $this->js->queued))
@@ -401,13 +401,17 @@ final class CSSJSS_Merger {
 			}
 		}
 
+		// Skip if it's header and script should be in footer
+		if(!$in_footer && isset($script->extra['group']))
+			return;
+
 		// Add script data to the plugin var
 		$this->js->queued[$handle] = 1;
 		$this->js->handle[$handle] = $handle.($script->ver ? '_'.$script->ver : '');
 		$this->js->queue[$handle] = [
-			'url' => $script->src,
-			'ver' => (empty($script->ver) ? '' : $script->ver),
-			'data' => (isset($script->extra['data']) ? $script->extra['data'] : null)
+			'url'   => $script->src,
+			'ver'   => (empty($script->ver) ? '' : $script->ver),
+			'data'  => (isset($script->extra['data']) ? $script->extra['data'] : null)
 		];
 
 		// Unset the url instead of dequeuing the script. There's a chance script
