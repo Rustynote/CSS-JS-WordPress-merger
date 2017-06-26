@@ -105,10 +105,7 @@ final class CSSJSS_Merger {
 		$this->options = wp_parse_args(get_option('cssjs_merger'), array(
 			'ignore_admin'  => false,
 			'css_external'  => true,
-			'css_whitelist' => array(
-				'*fonts.googleapis.com*',
-				'*font-awesome*'
-			),
+			'css_whitelist' => array(),
 			'css_error'    => [],
 			'js_footer'    => false,
 			'js_external'  => true,
@@ -188,7 +185,8 @@ final class CSSJSS_Merger {
 		$this->activation();
 
 		add_action('wp_enqueue_scripts', array($this, 'styles'), $this->get_last_priority('wp_enqueue_scripts'));
-		if(!$this->options['js_footer'])
+
+		// if(!$this->options['js_footer'])
 			add_action('wp_enqueue_scripts', array($this, 'scripts_header'), $this->get_last_priority('wp_enqueue_scripts'));
 
 		add_action('wp_footer', array($this, 'scripts_footer'));
@@ -220,9 +218,9 @@ final class CSSJSS_Merger {
 		// Run through queued css
 		$wp_styles = wp_styles();
 		foreach($wp_styles->queue as $queue) {
-			if(in_array($queue, ['admin-bar', 'dashicons'])) {
-				continue;
-			}
+			// if(in_array($queue, ['dashicons'])) {
+			// 	continue;
+			// }
 
 			$this->add_css($queue);
 		}
@@ -248,11 +246,12 @@ final class CSSJSS_Merger {
 		$wp_scripts = wp_scripts();
 		foreach($wp_scripts->queue as $queue) {
 			$script = $wp_scripts->registered[$queue];
-			if(in_array($queue, ['admin-bar'])) {
-				continue;
-			}
 
 			$this->add_js($queue, false);
+		}
+
+		if($this->options['js_footer']) {
+			return;
 		}
 
 		// There are no scripts for header.
@@ -273,15 +272,17 @@ final class CSSJSS_Merger {
 	 * @since 1.0.0
 	 */
 	public function scripts_footer() {
-		// Reset variables just in case
-        $this->js->queue  = [];
-        $this->js->handle = [];
-        $this->js->file   = '';
+		// Reset variables if scripts should be in header as well.
+		if(!$this->options['js_footer']) {
+			$this->js->queue  = [];
+			$this->js->handle = [];
+			$this->js->file   = '';
+		}
 
 		// Run through queued js
 		$wp_scripts = wp_scripts();
 		foreach($wp_scripts->queue as $queue) {
-			if(in_array($queue, ['admin-bar', 'CSS-JS-queue-merger_header']) || array_key_exists($queue, $this->js->queued)) {
+			if(in_array($queue, ['CSS-JS-queue-merger_header']) || array_key_exists($queue, $this->js->queued)) {
 				continue;
 			}
 
@@ -431,14 +432,8 @@ final class CSSJSS_Merger {
 			if(empty($queue['url']))
 				continue;
 
-			// Add http or https to url if it's needed
-			$protocol = 'http';
-			if(is_ssl())
-				$protocol = 'https';
-
-			if(strpos($queue['url'], $protocol) === false) {
-				$queue['url'] = $protocol.':'.$queue['url'];
-			}
+			// check the url
+			$queue['url'] = $this->parse_url($queue['url']);
 
 			// Get the css
 			$content = file_get_contents($queue['url']);
@@ -496,19 +491,8 @@ final class CSSJSS_Merger {
 			if(empty($script['url']))
 				continue;
 
-			// Add http or https to url if it's needed
-			$protocol = 'http';
-			if(is_ssl())
-				$protocol = 'https';
-
-			// Check if url has top level domain. If not, it's relative to current website.
-			if(!preg_match('/\..*\//', $script['url'])) {
-				$script['url'] = site_url($script['url']);
-			}
-
-			if(strpos($script['url'], $protocol) === false) {
-				$script['url'] = $protocol.':'.$script['url'];
-			}
+			// check the url
+			$script['url'] = $this->parse_url($script['url']);
 
 			// Get content of the script
 			$content = file_get_contents($script['url']);
@@ -561,6 +545,30 @@ final class CSSJSS_Merger {
 	protected function generate_js_name() {
 		$handle = implode(';', $this->js->handle);
 		$this->js->file = md5($handle).'.js';
+	}
+
+	/**
+	 * Parse url, add scheme or domain if url is relative.
+	 *
+	 * @since 1.0.0
+	 * @var string $url URL to pass
+	 * @return string
+	 */
+	public function parse_url($url) {
+		$scheme = 'http:';
+		if(is_ssl())
+			$scheme = 'https:';
+
+		// Relative url
+		$parsedUrl = parse_url($url);
+		if(!isset($parsedUrl['host']) && mb_substr($url, 0, 2) !== '//') {
+			$url = site_url($url);
+		}
+		if(mb_substr($url, 0, 4) !== 'http') {
+			$url = $scheme.$url;
+		}
+
+		return $url;
 	}
 
 	/**
