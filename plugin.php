@@ -186,9 +186,7 @@ final class CSSJSS_Merger {
 
 		add_action('wp_enqueue_scripts', array($this, 'styles'), $this->get_last_priority('wp_enqueue_scripts'));
 
-		// if(!$this->options['js_footer'])
-			add_action('wp_enqueue_scripts', array($this, 'scripts_header'), $this->get_last_priority('wp_enqueue_scripts'));
-
+		add_action('wp_enqueue_scripts', array($this, 'scripts_header'), $this->get_last_priority('wp_enqueue_scripts'));
 		add_action('wp_footer', array($this, 'scripts_footer'));
     }
 
@@ -218,10 +216,6 @@ final class CSSJSS_Merger {
 		// Run through queued css
 		$wp_styles = wp_styles();
 		foreach($wp_styles->queue as $queue) {
-			// if(in_array($queue, ['dashicons'])) {
-			// 	continue;
-			// }
-
 			$this->add_css($queue);
 		}
 
@@ -564,6 +558,7 @@ final class CSSJSS_Merger {
 		if(!isset($parsedUrl['host']) && mb_substr($url, 0, 2) !== '//') {
 			$url = site_url($url);
 		}
+		// Add scheme
 		if(mb_substr($url, 0, 4) !== 'http') {
 			$url = $scheme.$url;
 		}
